@@ -29,7 +29,7 @@ const FOOTER_TEXT = 'Prestige Market';
 
 // Kanalen
 const VERIFY_CHANNEL_ID = '1564632375336505344'; 
-const LEGIT_CHANNEL_ID = '1564553823270342758'; // AANGEPAST naar jouw nieuwe ID
+const LEGIT_CHANNEL_ID = '1564553823270342758';
 const TICKET_PANEL_CHANNEL_ID = '1564415332737884233';
 const LOG_CHANNEL_ID = '1555729409535774833'; 
 const TICKET_TRANSCRIPT_CHANNEL_ID = '1564415332737884234';
@@ -207,8 +207,6 @@ function updateBotStatus() {
   try {
     const guild = client.guilds.cache.first();
     if (!guild) return;
-    
-    // Status toont alleen Discord Members
     client.user.setActivity(`${guild.memberCount} Discord Members`, { type: 3 }); 
   } catch (error) {
     console.error("Failed to update status:", error);
@@ -248,9 +246,8 @@ async function setupLegit() {
   try {
     const channel = await client.channels.fetch(LEGIT_CHANNEL_ID).catch(() => null);
     
-    // Fix: Check of kanaal bestaat EN of het een tekstkanaal is
     if (!channel || !channel.isTextBased()) {
-      console.error(`❌ Legit channel (${LEGIT_CHANNEL_ID}) not found, is not a text channel, or no access. Controleer of je een tekstkanaal ID hebt gebruikt (geen categorie!).`);
+      console.error(`❌ Legit channel (${LEGIT_CHANNEL_ID}) not found, is not a text channel, or no access.`);
       return;
     }
 
@@ -283,6 +280,10 @@ async function setupLegit() {
 async function updateVerifyMessage(channel, messageId) {
   try {
     const guild = channel.guild;
+    
+    // FORCEER CACHE UPDATE
+    await guild.members.fetch(); 
+    
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
     const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
 
@@ -319,6 +320,10 @@ async function setupVerify() {
     for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
 
     const guild = channel.guild;
+    
+    // FORCEER CACHE UPDATE (Haalt alle members opnieuw op)
+    await guild.members.fetch();
+
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
     const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
 
