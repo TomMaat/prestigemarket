@@ -518,7 +518,7 @@ client.on('interactionCreate', async (i) => {
         return i.reply({ content: `❌ You need the <@&${VOUCH_ROLE_ID}> role to use this command.`, flags: MessageFlags.Ephemeral });
       }
 
-      await i.deferReply();
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
       const product = i.options.getString('product');
       const extra = i.options.getString('extra');
 
@@ -551,7 +551,14 @@ client.on('interactionCreate', async (i) => {
         
         await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}).`, 0x00ff88);
         
-        return i.editReply({ content: `✅ Your vouch has been posted in <#${VOUCH_CHANNEL_ID}>!` });
+        // DM naar de gebruiker
+        try {
+          await i.user.send({ content: `✅ Your vouch has been successfully posted in <#${VOUCH_CHANNEL_ID}>!` });
+        } catch (err) {
+          console.log(`Could not send DM to ${i.user.tag} (DMs closed).`);
+        }
+
+        return i.editReply({ content: `✅ Vouch posted!` });
       } catch (e) {
         console.error(e);
         return i.editReply({ content: `❌ Error: ${e.message}` });
