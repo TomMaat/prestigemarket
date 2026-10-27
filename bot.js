@@ -26,20 +26,22 @@ const PORT = process.env.PORT || 3000;
 const LOGO = 'https://cdn.discordapp.com/attachments/1564064006837244015/1564414389166014604/EC6CB4B8-367B-42B8-9E92-EF824122CBD9.png?ex=6ae1d6af&is=6ae0852f&hm=ff0e31a6b2668956d70437b411170db595a49c0b21e84ea425e6c8cd689adff0&';
 const FOOTER_TEXT = 'Prestige Market';
 
-// Aangepaste ID's
+// Kanalen
 const VERIFY_CHANNEL_ID = '1564632375336505344'; 
 const LEGIT_CHANNEL_ID = '1564632244235014315';
-
-const VERIFIED_ROLE_ID = '1564415134171013154';
 const TICKET_PANEL_CHANNEL_ID = '1564415332737884233';
+const LOG_CHANNEL_ID = '1555729409535774833'; // Algemene Bot Logs
 const TICKET_TRANSCRIPT_CHANNEL_ID = '1564415332737884234'; // Pas aan als je een specifiek transcript kanaal hebt
 
+// Rollen
+const VERIFIED_ROLE_ID = '1564415134171013154';
 const STAFF_ROLE_IDS = [
   '1564419989002256516',
   '1564415131054772295',
   '1564415129955729418'
 ];
 
+// Ticket Categories
 const TICKET_CATEGORIES = {
   support: { name: 'Support', prefix: 'support', categoryId: '1564627077880094801', emoji: '🎫', color: 0x3498db },
   purchase: { name: 'Purchase', prefix: 'purchase', categoryId: '1564627178384007249', emoji: '🛒', color: 0x00ff88 },
@@ -76,7 +78,7 @@ const RULES_TEXT =
   "> • Advertising is only permitted in designated channels.\n\n" +
   "*Thank you for choosing Prestige.*";
 
-// ===== HTTP Server (Keep-Alive) =====
+// ===== HTTP Server =====
 http.createServer((req, res) => {
   res.writeHead(200);
   res.end('Bot is running!');
@@ -97,7 +99,6 @@ async function readGist() {
   if (!res.ok) throw new Error(`Gist read failed: ${res.status}`);
   const data = await res.json();
   
-  // Fallback als bestand nog niet bestaat
   if (!data.files || !data.files['data.json']) {
     return {
       legitVotes: { approve: [], reject: [] },
@@ -146,26 +147,42 @@ async function removeTicket(channelId) {
   const t = await getTickets(); delete t[channelId]; await saveTickets(t);
 }
 
-// ===== HELPER =====
+// ===== HELPERS =====
 function isStaff(member) {
   return member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
+}
+
+// Centrale Log Functie
+async function sendLog(title, description, color = 0x5865f2, fields = []) {
+  try {
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setColor(color)
+      .setDescription(description)
+      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+      .setTimestamp();
+      
+    if (fields.length > 0) embed.addFields(fields);
+
+    await logChannel.send({ embeds: [embed] });
+  } catch (e) {
+    console.error('Kon log niet sturen:', e.message);
+  }
 }
 
 // ===== VERIFY SYSTEEM =====
 async function setupVerify() {
   try {
     const channel = await client.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
-    if (!channel) {
-      console.error(`Verify kanaal (${VERIFY_CHANNEL_ID}) niet gevonden.`);
-      return;
-    }
+    if (!channel) return console.error(`Verify kanaal (${VERIFY_CHANNEL_ID}) niet gevonden.`);
 
     const fetched = await channel.messages.fetch({ limit: 50 });
     for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
 
     const guild = channel.guild;
-    await guild.members.fetch(); 
-    
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
     const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
 
@@ -212,10 +229,7 @@ function buildLegitRow(votes) {
 async function setupLegit() {
   try {
     const channel = await client.channels.fetch(LEGIT_CHANNEL_ID).catch(() => null);
-    if (!channel) {
-      console.error(`Legit kanaal (${LEGIT_CHANNEL_ID}) niet gevonden.`);
-      return;
-    }
+    if (!channel) return console.error(`Legit kanaal (${LEGIT_CHANNEL_ID}) niet gevonden.`);
 
     const votes = await getLegitVotes();
     const embed = buildLegitEmbed(votes);
@@ -323,6 +337,13 @@ async function closeTicket(channel, closerId) {
       await transcriptChannel.send({ embeds: [embed], files: [attachment] });
     }
 
+    // Log naar het centrale log kanaal
+    await sendLog('🔒 Ticket Gesloten', `<@${closerId}> heeft het ticket van <@${ticket.userId}> gesloten.`, 0xff4444, [
+      { name: 'Kanaal', value: `#${channel.name}`, inline: true },
+      { name: 'Categorie', value: cat ? cat.name : 'Onbekend', inline: true },
+      { name: 'Berichten', value: `${messageCount}`, inline: true }
+    ]);
+
     try {
       const user = await client.users.fetch(ticket.userId);
       await user.send({ content: `🔒 Je ticket **#${channel.name}** is gesloten. Hier is het transcript:`, files: [attachment] });
@@ -361,6 +382,7 @@ client.on('interactionCreate', async (i) => {
       if (!isStaff(i.member)) return i.reply({ content: '❌ Geen permissie.', ephemeral: true });
       await i.deferReply({ ephemeral: true });
       await setupTicketPanel();
+      await sendLog('🛠️ Command Gebruikt', `<@${i.user.id}> heeft het ticket panel vernieuwd.`, 0x5865f2);
       return i.editReply({ content: '✅ Ticket panel geplaatst!' });
     }
     
@@ -368,6 +390,7 @@ client.on('interactionCreate', async (i) => {
       if (!isStaff(i.member)) return i.reply({ content: '❌ Geen permissie.', ephemeral: true });
       await i.deferReply({ ephemeral: true });
       await setupVerify();
+      await sendLog('🛠️ Command Gebruikt', `<@${i.user.id}> heeft het verify bericht vernieuwd.`, 0x5865f2);
       return i.editReply({ content: '✅ Verify bericht vernieuwd!' });
     }
 
@@ -390,9 +413,11 @@ client.on('interactionCreate', async (i) => {
         if (name === 'add') {
           await i.channel.permissionOverwrites.edit(targetUser.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true, AttachFiles: true });
           await i.channel.send({ content: `➕ <@${targetUser.id}> is toegevoegd door <@${i.user.id}>.` });
+          await sendLog('➕ Gebruiker Toegevoegd', `<@${i.user.id}> heeft <@${targetUser.id}> toegevoegd aan **#${i.channel.name}**.`, 0x00ff88);
         } else {
           await i.channel.permissionOverwrites.delete(targetUser.id);
           await i.channel.send({ content: `➖ <@${targetUser.id}> is verwijderd door <@${i.user.id}>.` });
+          await sendLog('➖ Gebruiker Verwijderd', `<@${i.user.id}> heeft <@${targetUser.id}> verwijderd uit **#${i.channel.name}**.`, 0xff4444);
         }
         await i.editReply({ content: '✅ Gelukt.' });
       } catch (e) { await i.editReply({ content: `❌ Fout: ${e.message}` }); }
@@ -405,7 +430,9 @@ client.on('interactionCreate', async (i) => {
       await i.deferReply({ ephemeral: true });
       const newName = i.options.getString('name').toLowerCase().replace(/[^a-z0-9-]/g, '-');
       try {
+        const oldName = i.channel.name;
         await i.channel.setName(newName);
+        await sendLog('✏️ Ticket Hernoemd', `<@${i.user.id}> heeft ticket **#${oldName}** hernoemd naar **#${newName}**.`, 0xf39c12);
         await i.editReply({ content: `✅ Hernoemd naar ${newName}.` });
       } catch (e) { await i.editReply({ content: `❌ Fout: ${e.message}` }); }
       return;
@@ -447,6 +474,12 @@ client.on('interactionCreate', async (i) => {
       const staffMentions = STAFF_ROLE_IDS.map(id => `<@&${id}>`).join(' ');
       await ticketChannel.send({ content: `<@${i.user.id}> ${staffMentions}`, embeds: [embed], components: [closeRow] });
       
+      // Log Nieuw Ticket
+      await sendLog('🎫 Nieuw Ticket', `<@${i.user.id}> heeft een nieuw ticket geopend.`, 0x00ff88, [
+        { name: 'Categorie', value: cat.name, inline: true },
+        { name: 'Kanaal', value: `<#${ticketChannel.id}>`, inline: true }
+      ]);
+
       await i.editReply({ content: `✅ Ticket aangemaakt: <#${ticketChannel.id}>` });
     } catch (e) { await i.editReply({ content: `❌ Fout: ${e.message}` }); }
     return;
@@ -461,17 +494,24 @@ client.on('interactionCreate', async (i) => {
         
         // Update teller
         const messageId = await getVerifyMessageId();
+        let currentCount = 0;
         if (messageId) {
           const verifiedRole = i.guild.roles.cache.get(VERIFIED_ROLE_ID);
-          const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
+          currentCount = verifiedRole ? verifiedRole.members.size : 0;
           try {
             const msg = await i.channel.messages.fetch(messageId);
             if (msg && msg.embeds[0]) {
-              const newEmbed = EmbedBuilder.from(msg.embeds[0]).spliceFields(0, 1, { name: '👥 Geverifieerde leden', value: `**${verifiedCount}**`, inline: false });
+              const newEmbed = EmbedBuilder.from(msg.embeds[0]).spliceFields(0, 1, { name: '👥 Geverifieerde leden', value: `**${currentCount}**`, inline: false });
               await msg.edit({ embeds: [newEmbed] });
             }
           } catch (e) {}
         }
+
+        // Log Verify
+        await sendLog('✅ Gebruiker Geverifieerd', `<@${i.user.id}> heeft de regels geaccepteerd.`, 0x00ff88, [
+          { name: 'Totaal geverifieerd', value: `${currentCount}`, inline: true }
+        ]);
+
       } catch (e) { await i.reply({ content: `❌ Fout: ${e.message}`, ephemeral: true }); }
       return;
     }
@@ -491,10 +531,20 @@ client.on('interactionCreate', async (i) => {
         const votes = await getLegitVotes();
         votes.approve = votes.approve.filter(id => id !== i.user.id);
         votes.reject = votes.reject.filter(id => id !== i.user.id);
-        if (i.customId === 'legit_approve') votes.approve.push(i.user.id);
-        else votes.reject.push(i.user.id);
+        
+        let action = '';
+        if (i.customId === 'legit_approve') { votes.approve.push(i.user.id); action = 'Legit (✅)'; }
+        else { votes.reject.push(i.user.id); action = 'Not Legit (❌)'; }
+
         await saveLegitVotes(votes);
         await i.update({ embeds: [buildLegitEmbed(votes)], components: [buildLegitRow(votes)] });
+
+        // Log Legit Vote
+        await sendLog('🗳️ Legit Stem', `<@${i.user.id}> heeft gestemd: **${action}**`, 0x5865f2, [
+          { name: 'Totaal ✅', value: `${votes.approve.length}`, inline: true },
+          { name: 'Totaal ❌', value: `${votes.reject.length}`, inline: true }
+        ]);
+
       } catch (e) { await i.reply({ content: `❌ Fout: ${e.message}`, ephemeral: true }); }
       return;
     }
@@ -505,11 +555,16 @@ client.once('ready', async () => {
   console.log(`✅ Bot online als ${client.user.tag}`);
   const guild = client.guilds.cache.first();
   if (guild) {
-    await guild.members.fetch();
     client.user.setActivity(`${guild.memberCount} Discord Members`, { type: 3 });
   }
+  
+  await new Promise(resolve => setTimeout(resolve, 3000));
   await setupVerify();
+  
+  await new Promise(resolve => setTimeout(resolve, 3000));
   await setupLegit();
+  
+  await new Promise(resolve => setTimeout(resolve, 3000));
   await setupTicketPanel();
 });
 
