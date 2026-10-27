@@ -26,11 +26,13 @@ const PORT = process.env.PORT || 3000;
 const LOGO = 'https://cdn.discordapp.com/attachments/1564064006837244015/1564414389166014604/EC6CB4B8-367B-42B8-9E92-EF824122CBD9.png?ex=6ae1d6af&is=6ae0852f&hm=ff0e31a6b2668956d70437b411170db595a49c0b21e84ea425e6c8cd689adff0&';
 const FOOTER_TEXT = 'Prestige Market';
 
-const VERIFY_CHANNEL_ID = '1564415101234567890'; // Pas dit aan naar je echte Verify kanaal ID
+// Aangepast: Rules channel ID
+const VERIFY_CHANNEL_ID = '1518970768967340083'; 
 const VERIFIED_ROLE_ID = '1564415134171013154';
+
 const LEGIT_CHANNEL_ID = '1564553823270342758';
 const TICKET_PANEL_CHANNEL_ID = '1564415332737884233';
-const TICKET_TRANSCRIPT_CHANNEL_ID = '1564415332737884234'; // Pas dit aan naar je echte Transcript kanaal ID
+const TICKET_TRANSCRIPT_CHANNEL_ID = '1564415332737884234'; // Pas aan als je een specifiek transcript kanaal hebt
 
 const STAFF_ROLE_IDS = [
   '1564419989002256516',
@@ -94,6 +96,17 @@ async function readGist() {
   });
   if (!res.ok) throw new Error(`Gist read failed: ${res.status}`);
   const data = await res.json();
+  
+  // Fallback als bestand nog niet bestaat
+  if (!data.files || !data.files['data.json']) {
+    return {
+      legitVotes: { approve: [], reject: [] },
+      legitMessageId: null,
+      verifyMessageId: null,
+      tickets: {},
+    };
+  }
+
   const parsed = JSON.parse(data.files['data.json'].content);
   return {
     legitVotes: parsed.legitVotes || { approve: [], reject: [] },
@@ -141,8 +154,11 @@ function isStaff(member) {
 // ===== VERIFY SYSTEEM =====
 async function setupVerify() {
   try {
-    const channel = await client.channels.fetch(VERIFY_CHANNEL_ID);
-    if (!channel) return;
+    const channel = await client.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
+    if (!channel) {
+      console.error(`Verify kanaal (${VERIFY_CHANNEL_ID}) niet gevonden.`);
+      return;
+    }
 
     const fetched = await channel.messages.fetch({ limit: 50 });
     for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
@@ -195,8 +211,11 @@ function buildLegitRow(votes) {
 
 async function setupLegit() {
   try {
-    const channel = await client.channels.fetch(LEGIT_CHANNEL_ID);
-    if (!channel) return;
+    const channel = await client.channels.fetch(LEGIT_CHANNEL_ID).catch(() => null);
+    if (!channel) {
+      console.error(`Legit kanaal (${LEGIT_CHANNEL_ID}) niet gevonden.`);
+      return;
+    }
 
     const votes = await getLegitVotes();
     const embed = buildLegitEmbed(votes);
@@ -208,6 +227,7 @@ async function setupLegit() {
         const msg = await channel.messages.fetch(messageId);
         if (msg && msg.author.id === client.user.id) {
           await msg.edit({ embeds: [embed], components: [row] });
+          console.log('✅ Legit poll bijgewerkt');
           return;
         }
       } catch (e) {}
@@ -285,21 +305,24 @@ async function closeTicket(channel, closerId) {
     const buffer = Buffer.from(html, 'utf-8');
     const attachment = new AttachmentBuilder(buffer, { name: `transcript-${channel.name}.html` });
     
-    const transcriptChannel = await client.channels.fetch(TICKET_TRANSCRIPT_CHANNEL_ID);
+    const transcriptChannel = await client.channels.fetch(TICKET_TRANSCRIPT_CHANNEL_ID).catch(() => null);
     const cat = TICKET_CATEGORIES[ticket.categorie];
 
-    const embed = new EmbedBuilder()
-      .setTitle('Ticket Transcript')
-      .setColor(cat ? cat.color : 0x5865f2)
-      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
-      .addFields(
-        { name: 'Kanaal', value: `#${channel.name}`, inline: true },
-        { name: 'Klant', value: `<@${ticket.userId}>`, inline: true },
-        { name: 'Gesloten door', value: `<@${closerId}>`, inline: true },
-        { name: 'Berichten', value: `${messageCount}`, inline: true }
-      ).setTimestamp();
+    if (transcriptChannel) {
+      const embed = new EmbedBuilder()
+        .setTitle('Ticket Transcript')
+        .setColor(cat ? cat.color : 0x5865f2)
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .addFields(
+          { name: 'Kanaal', value: `#${channel.name}`, inline: true },
+          { name: 'Klant', value: `<@${ticket.userId}>`, inline: true },
+          { name: 'Gesloten door', value: `<@${closerId}>`, inline: true },
+          { name: 'Berichten', value: `${messageCount}`, inline: true }
+        ).setTimestamp();
 
-    await transcriptChannel.send({ embeds: [embed], files: [attachment] });
+      await transcriptChannel.send({ embeds: [embed], files: [attachment] });
+    }
+
     try {
       const user = await client.users.fetch(ticket.userId);
       await user.send({ content: `🔒 Je ticket **#${channel.name}** is gesloten. Hier is het transcript:`, files: [attachment] });
@@ -443,7 +466,7 @@ client.on('interactionCreate', async (i) => {
           const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
           try {
             const msg = await i.channel.messages.fetch(messageId);
-            if (msg) {
+            if (msg && msg.embeds[0]) {
               const newEmbed = EmbedBuilder.from(msg.embeds[0]).spliceFields(0, 1, { name: '👥 Geverifieerde leden', value: `**${verifiedCount}**`, inline: false });
               await msg.edit({ embeds: [newEmbed] });
             }
