@@ -12,7 +12,7 @@ const {
   AttachmentBuilder,
   REST,
   Routes,
-  MessageFlags, // Toegevoegd voor de deprecation fix
+  MessageFlags,
 } = require('discord.js');
 const http = require('http');
 
@@ -153,7 +153,6 @@ function isStaff(member) {
   return member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
 }
 
-// Centrale Log Functie
 async function sendLog(title, description, color = 0x5865f2, fields = []) {
   try {
     const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
@@ -201,6 +200,29 @@ function startStatusInterval() {
 }
 
 // ===== VERIFY SYSTEEM =====
+async function updateVerifyMessage(channel, messageId) {
+  try {
+    const guild = channel.guild;
+    const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
+    const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
+
+    const msg = await channel.messages.fetch(messageId);
+    if (!msg) return;
+
+    const newRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('verify_accept_rules')
+        .setLabel(`Accept Rules (${verifiedCount})`)
+        .setEmoji('✅')
+        .setStyle(ButtonStyle.Success)
+    );
+
+    await msg.edit({ components: [newRow] });
+  } catch (e) {
+    // Stille error als het bericht niet gevonden kan worden
+  }
+}
+
 async function setupVerify() {
   try {
     const channel = await client.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
@@ -208,6 +230,10 @@ async function setupVerify() {
 
     const fetched = await channel.messages.fetch({ limit: 50 });
     for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
+
+    const guild = channel.guild;
+    const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
+    const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
 
     const embed = new EmbedBuilder()
       .setAuthor({ name: 'PRESTIGE RULES', iconURL: LOGO })
@@ -218,7 +244,11 @@ async function setupVerify() {
       .setTimestamp();
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('verify_accept_rules').setLabel('Accept Rules').setEmoji('✅').setStyle(ButtonStyle.Success)
+      new ButtonBuilder()
+        .setCustomId('verify_accept_rules')
+        .setLabel(`Accept Rules (${verifiedCount})`)
+        .setEmoji('✅')
+        .setStyle(ButtonStyle.Success)
     );
 
     const newMsg = await channel.send({ embeds: [embed], components: [row] });
@@ -512,6 +542,12 @@ client.on('interactionCreate', async (i) => {
         await i.member.roles.add(VERIFIED_ROLE_ID);
         await i.reply({ content: '✅ You have accepted the rules and are now verified!', flags: MessageFlags.Ephemeral });
         
+        // Update the verify message so the button shows the new count
+        const messageId = await getVerifyMessageId();
+        if (messageId) {
+          await updateVerifyMessage(i.channel, messageId);
+        }
+
         const verifiedRole = i.guild.roles.cache.get(VERIFIED_ROLE_ID);
         const currentCount = verifiedRole ? verifiedRole.members.size : 0;
 
