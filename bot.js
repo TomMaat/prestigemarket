@@ -526,13 +526,12 @@ client.on('interactionCreate', async (i) => {
         const channel = await client.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
         if (!channel) return i.editReply({ content: '❌ Vouch channel not found.' });
 
-        // Haal de volgende nummer op
         let nummer = 1;
         try {
           const current = await readVouchCounter();
           nummer = current + 1;
           await writeVouchCounter(nummer);
-          cachedVouches = nummer; // Update cache direct
+          cachedVouches = nummer;
         } catch (e) { console.error('Counter error:', e); }
 
         const embed = new EmbedBuilder()
