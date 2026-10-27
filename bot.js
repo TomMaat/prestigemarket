@@ -33,9 +33,11 @@ const LEGIT_CHANNEL_ID = '1564553823270342758';
 const TICKET_PANEL_CHANNEL_ID = '1564415332737884233';
 const LOG_CHANNEL_ID = '1555729409535774833'; 
 const TICKET_TRANSCRIPT_CHANNEL_ID = '1564415332737884234';
+const VOUCH_CHANNEL_ID = '1564555149865656401';
 
 // Rollen
 const VERIFIED_ROLE_ID = '1564415134171013154';
+const VOUCH_ROLE_ID = '1564635023787950090';
 const STAFF_ROLE_IDS = [
   '1564419989002256516',
   '1564415131054772295',
@@ -111,6 +113,7 @@ async function readGist() {
       tickets: {},
       notlegitTickets: {},
       confirmedRejects: [],
+      vouchCounter: 0,
     };
   }
 
@@ -122,6 +125,7 @@ async function readGist() {
     tickets: parsed.tickets || {},
     notlegitTickets: parsed.notlegitTickets || {},
     confirmedRejects: parsed.confirmedRejects || [],
+    vouchCounter: parsed.vouchCounter || 0,
   };
 }
 
@@ -177,6 +181,9 @@ async function setNotLegitStatus(channelId, status) {
   }
 }
 
+async function readVouchCounter() { const d = await readGist(); return d.vouchCounter; }
+async function writeVouchCounter(n) { const d = await readGist(); d.vouchCounter = n; await writeGist(d); }
+
 // ===== HELPERS =====
 function isStaff(member) {
   return member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
@@ -203,18 +210,38 @@ async function sendLog(title, description, color = 0x5865f2, fields = []) {
 }
 
 // ===== STATUS SYSTEEM =====
-function updateBotStatus() {
+let statusState = 0; // 0 = Members, 1 = Vouches
+let cachedVouches = 0;
+
+async function updateBotStatus() {
   try {
     const guild = client.guilds.cache.first();
     if (!guild) return;
-    client.user.setActivity(`${guild.memberCount} Discord Members`, { type: 3 }); 
+
+    if (statusState === 0) {
+      client.user.setActivity(`${guild.memberCount} Discord Members`, { type: 3 }); 
+    } else {
+      client.user.setActivity(`${cachedVouches} Vouches`, { type: 3 }); 
+    }
+    
+    // Cycle tussen de 2 statussen
+    statusState = (statusState + 1) % 2;
   } catch (error) {
     console.error("Failed to update status:", error);
   }
 }
 
+async function refreshCounters() {
+  try {
+    const d = await readGist();
+    cachedVouches = d.vouchCounter || 0;
+  } catch (e) {}
+}
+
 function startStatusInterval() {
+  refreshCounters();
   updateBotStatus();
+  setInterval(refreshCounters, 60000);
   setInterval(updateBotStatus, 10000); 
 }
 
@@ -228,8 +255,7 @@ function buildLegitEmbed(votes, confirmedRejects = []) {
       '**No without proof = ban**\n\n' +
       `> ✅ Legit — **${votes.approve.length}**\n` +
       `> ❌ Not legit — **${votes.reject.length}**` +
-      (confirmedCount > 0 ? `\n> 🟢 Confirmed (with proof) — **${confirmedCount}**` : '') +
-      `\n\n*Clicking ❌ Not legit opens a private ticket where you must upload proof.*`
+      (confirmedCount > 0 ? `\n> 🟢 Confirmed (with proof) — **${confirmedCount}**` : '')
     )
     .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
     .setThumbnail(LOGO);
@@ -247,7 +273,7 @@ async function setupLegit() {
     const channel = await client.channels.fetch(LEGIT_CHANNEL_ID).catch(() => null);
     
     if (!channel || !channel.isTextBased()) {
-      console.error(`❌ Legit channel (${LEGIT_CHANNEL_ID}) not found, is not a text channel, or no access.`);
+      console.error(`❌ Legit channel (${LEGIT_CHANNEL_ID}) not found.`);
       return;
     }
 
@@ -277,12 +303,16 @@ async function setupLegit() {
 }
 
 // ===== VERIFY SYSTEEM =====
-async function updateVerifyMessage(channel, messageId) {
+async function updateVerifyMessage() {
   try {
+    const channel = await client.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
+    if (!channel) return;
+
+    const messageId = await getVerifyMessageId();
+    if (!messageId) return;
+
     const guild = channel.guild;
-    
-    // FORCEER CACHE UPDATE
-    await guild.members.fetch(); 
+    await guild.members.fetch(); // Forceer member cache update
     
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
     const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
@@ -321,7 +351,7 @@ async function setupVerify() {
 
     const guild = channel.guild;
     
-    // FORCEER CACHE UPDATE (Haalt alle members opnieuw op)
+    // Forceer member cache update
     await guild.members.fetch();
 
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
@@ -447,6 +477,14 @@ async function closeTicket(channel, closerId) {
 
 // ===== COMMANDS =====
 const commands = [
+  { 
+    name: 'vouch', 
+    description: 'Leave a vouch',
+    options: [
+      { name: 'product', description: 'What did you buy?', type: 3, required: true },
+      { name: 'extra', description: 'Extra information', type: 3, required: true }
+    ]
+  },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'close', description: 'Close this ticket' },
@@ -475,6 +513,52 @@ client.on('interactionCreate', async (i) => {
   if (i.isChatInputCommand()) {
     const name = i.commandName;
     
+    if (name === 'vouch') {
+      if (!i.member.roles.cache.has(VOUCH_ROLE_ID)) {
+        return i.reply({ content: `❌ You need the <@&${VOUCH_ROLE_ID}> role to use this command.`, flags: MessageFlags.Ephemeral });
+      }
+
+      await i.deferReply();
+      const product = i.options.getString('product');
+      const extra = i.options.getString('extra');
+
+      try {
+        const channel = await client.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
+        if (!channel) return i.editReply({ content: '❌ Vouch channel not found.' });
+
+        // Haal de volgende nummer op
+        let nummer = 1;
+        try {
+          const current = await readVouchCounter();
+          nummer = current + 1;
+          await writeVouchCounter(nummer);
+          cachedVouches = nummer; // Update cache direct
+        } catch (e) { console.error('Counter error:', e); }
+
+        const embed = new EmbedBuilder()
+          .setTitle(`Vouch #${nummer}`)
+          .setColor(0x00ff88)
+          .setThumbnail(LOGO)
+          .setAuthor({ name: i.user.displayName, iconURL: i.user.displayAvatarURL() })
+          .addFields(
+            { name: 'Product', value: product, inline: true },
+            { name: 'Customer', value: `<@${i.user.id}>`, inline: true },
+            { name: 'Extra', value: extra, inline: false }
+          )
+          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+          .setTimestamp();
+
+        await channel.send({ embeds: [embed] });
+        
+        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}).`, 0x00ff88);
+        
+        return i.editReply({ content: `✅ Your vouch has been posted in <#${VOUCH_CHANNEL_ID}>!` });
+      } catch (e) {
+        console.error(e);
+        return i.editReply({ content: `❌ Error: ${e.message}` });
+      }
+    }
+
     if (name === 'ticketpanel') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
@@ -652,8 +736,7 @@ client.on('interactionCreate', async (i) => {
         await i.member.roles.add(VERIFIED_ROLE_ID);
         await i.reply({ content: '✅ You have accepted the rules and are now verified!', flags: MessageFlags.Ephemeral });
         
-        const messageId = await getVerifyMessageId();
-        if (messageId) await updateVerifyMessage(i.channel, messageId);
+        await updateVerifyMessage();
 
         const verifiedRole = i.guild.roles.cache.get(VERIFIED_ROLE_ID);
         const currentCount = verifiedRole ? verifiedRole.members.size : 0;
@@ -847,7 +930,7 @@ client.on('interactionCreate', async (i) => {
   }
 });
 
-// ===== WELCOME DM =====
+// ===== EVENTS VOOR VERIFY UPDATE =====
 client.on('guildMemberAdd', async (member) => {
   if (member.guild.id !== GUILD_ID) return;
   try {
@@ -866,6 +949,23 @@ client.on('guildMemberAdd', async (member) => {
     await member.send({ embeds: [embed] });
   } catch (e) {
     console.log(`Could not send welcome DM to ${member.user.tag} (DMs closed).`);
+  }
+  await updateVerifyMessage();
+});
+
+client.on('guildMemberRemove', async (member) => {
+  if (member.guild.id !== GUILD_ID) return;
+  await updateVerifyMessage();
+});
+
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  if (newMember.guild.id !== GUILD_ID) return;
+  
+  const hadRole = oldMember.roles.cache.has(VERIFIED_ROLE_ID);
+  const hasRole = newMember.roles.cache.has(VERIFIED_ROLE_ID);
+
+  if (hadRole !== hasRole) {
+    await updateVerifyMessage();
   }
 });
 
