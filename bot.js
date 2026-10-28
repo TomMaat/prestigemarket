@@ -1175,12 +1175,18 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 client.once('ready', async () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
   startStatusInterval();
+  
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupVerify();
+  
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupLegit();
+  
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupTicketPanel();
+
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  await setupStorePanel(); // <-- Dit zorgt ervoor dat het paneel automatisch verschijnt
 });
 
 client.login(TOKEN);
