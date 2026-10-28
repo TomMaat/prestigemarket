@@ -619,10 +619,9 @@ const commands = [
       { name: 'extra', description: 'Extra information', type: 3, required: true }
   ] },
   { name: 'payment', description: 'Send the payment details for this ticket', options: [
-      { name: 'link', description: 'Payment link (iDeal/Tikkie/PayPal)', type: 3, required: false },
-      { name: 'crypto_address', description: 'Crypto wallet address (LTC)', type: 3, required: false },
-      { name: 'bank_account_number', description: 'Bank account number (IBAN)', type: 3, required: false },
-      { name: 'account_name', description: 'Bank account holder name', type: 3, required: false }
+      { name: 'link_or_crypto', description: 'Payment link (iDeal/Tikkie) or Crypto Address (LTC)', type: 3, required: false },
+      { name: 'bank_account_number', description: 'Bank account number (IBAN) for Bank Transfer', type: 3, required: false },
+      { name: 'account_name', description: 'Bank account holder name for Bank Transfer', type: 3, required: false }
   ] },
   { name: 'changepaymentmethod', description: 'Change the payment method for this ticket' },
   { name: 'delivered', description: 'Mark ticket as delivered and move to archive' },
@@ -751,8 +750,7 @@ client.on('interactionCreate', async (i) => {
       const method = ticket.payment || 'ideal';
       const methodName = PAYMENT_METHODS[method] || 'Unknown';
 
-      const link = i.options.getString('link');
-      const cryptoAddress = i.options.getString('crypto_address');
+      const linkOrCrypto = i.options.getString('link_or_crypto');
       const bankAccountNumber = i.options.getString('bank_account_number');
       const accountName = i.options.getString('account_name');
 
@@ -772,15 +770,15 @@ client.on('interactionCreate', async (i) => {
           { name: 'Account Name', value: `\`${accountName}\``, inline: false }
         );
       } else if (method === 'crypto') {
-        if (!cryptoAddress) {
-          return i.reply({ content: '❌ For Crypto you must provide a `crypto_address`.', flags: MessageFlags.Ephemeral });
+        if (!linkOrCrypto) {
+          return i.reply({ content: '❌ For Crypto you must provide a `link_or_crypto` (crypto address).', flags: MessageFlags.Ephemeral });
         }
-        embed.addFields({ name: 'Crypto Address (LTC)', value: `\`${cryptoAddress}\``, inline: false });
+        embed.addFields({ name: 'Crypto Address (LTC)', value: `\`${linkOrCrypto}\``, inline: false });
       } else {
-        if (!link) {
-          return i.reply({ content: '❌ For this method you must provide a `link`.', flags: MessageFlags.Ephemeral });
+        if (!linkOrCrypto) {
+          return i.reply({ content: '❌ For this method you must provide a `link_or_crypto`.', flags: MessageFlags.Ephemeral });
         }
-        embed.addFields({ name: 'Payment Link', value: link, inline: false });
+        embed.addFields({ name: 'Payment Link', value: linkOrCrypto, inline: false });
       }
 
       return i.reply({ embeds: [embed] });
