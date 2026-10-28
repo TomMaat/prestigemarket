@@ -72,6 +72,9 @@ const PAYMENT_METHODS = {
   bank: 'Bank Transfer'
 };
 
+// Tijdelijke opslag voor purchase keuzes (per user)
+const pendingPurchases = new Map();
+
 // ===== De Regels =====
 const RULES_TEXT = 
   "**1. PAYMENTS**\n" +
@@ -174,8 +177,10 @@ async function setVerifyMessageId(id) { const d = await readGist(); d.verifyMess
 
 async function getTickets() { const d = await readGist(); return d.tickets; }
 async function saveTickets(t) { const d = await readGist(); d.tickets = t; await writeGist(d); }
-async function addTicket(channelId, userId, categoryKey) {
-  const t = await getTickets(); t[channelId] = { userId, categorie: categoryKey, gestart: Date.now(), extraUsers: [] }; await saveTickets(t);
+async function addTicket(channelId, userId, categoryKey, extraData = {}) {
+  const t = await getTickets(); 
+  t[channelId] = { userId, categorie: categoryKey, gestart: Date.now(), extraUsers: [], ...extraData }; 
+  await saveTickets(t);
 }
 async function removeTicket(channelId) {
   const t = await getTickets(); delete t[channelId]; await saveTickets(t);
@@ -480,16 +485,7 @@ async function closeTicket(channel, closerId) {
       await transcriptChannel.send({ embeds: [embed], files: [attachment] });
     }
 
-    await sendLog('🔒 Ticket Closed', `<@${closerId}> closed the ticket from <@${ticket.userId}>.`, 0xff4444, [
-      { name: 'Channel', value: `#${channel.name}`, inline: true },
-      { name: 'Category', value: cat ? cat.name : 'Unknown', inline: true },
-      { name: 'Messages', value: `${messageCount}`, inline: true }
-    ]);
-
-    try {
-      const user = await client.users.fetch(ticket.userId);
-      await user.send({ content: `🔒 Your ticket **#${channel.name}** has been closed. Here is the transcript:`, files: [attachment] });
-    } catch (e) {}
+    await sendLog('🔒 Ticket Closed', `<@${closerId}> closed the ticket from <@${ticket.userId}>.`, 0xff4444);
   } catch (e) { console.error('Transcript error:', e.message); }
 
   await removeTicket(channel.id);
@@ -510,6 +506,7 @@ const commands = [
   { name: 'removeproduct', description: 'Remove a product from a service', options: [{ name: 'service', description: 'Service name', type: 3, required: true }, { name: 'name', description: 'Product name', type: 3, required: true }] },
   { name: 'addprice', description: 'Set the price of a product', options: [{ name: 'product', description: 'Product name', type: 3, required: true }, { name: 'price', description: 'Price', type: 3, required: true }] },
   { name: 'removeprice', description: 'Remove the price of a product', options: [{ name: 'product', description: 'Product name', type: 3, required: true }] },
+  { name: 'manageproducts', description: 'View all products and prices' },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'close', description: 'Close this ticket' },
@@ -533,7 +530,41 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 client.on('interactionCreate', async (i) => {
   if (i.isChatInputCommand()) {
     const name = i.commandName;
-    
+
+    if (name === 'manageproducts') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      const store = await getStoreData();
+      
+      const embed = new EmbedBuilder()
+        .setTitle('📦 Store Overview')
+        .setColor(0x5865f2)
+        .setThumbnail(LOGO)
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      if (Object.keys(store.sections).length === 0) {
+        embed.setDescription('*No sections configured yet.*');
+      } else {
+        for (const [section, services] of Object.entries(store.sections)) {
+          let sectionText = '';
+          if (services.length === 0) sectionText = '*No services*';
+          for (const service of services) {
+            const products = store.services[service] || [];
+            let productText = '';
+            if (products.length === 0) productText = '  └ *No products*';
+            for (const prod of products) {
+              const price = store.products[prod]?.price || 'N/A';
+              productText += `  └ ${prod} (${price})\n`;
+            }
+            sectionText += `**${service}**\n${productText}`;
+          }
+          embed.addFields({ name: `🔹 ${section}`, value: sectionText || '*Empty*', inline: false });
+        }
+      }
+
+      return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    }
+
     if (name === 'vouch') {
       if (!i.member.roles.cache.has(VOUCH_ROLE_ID)) {
         return i.reply({ content: `❌ You need the <@&${VOUCH_ROLE_ID}> role to use this command.`, flags: MessageFlags.Ephemeral });
@@ -569,12 +600,9 @@ client.on('interactionCreate', async (i) => {
           .setTimestamp();
 
         await channel.send({ embeds: [embed] });
-        
         await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}).`, 0x00ff88);
         
-        try {
-          await i.user.send({ content: `✅ Your vouch has been successfully posted in <#${VOUCH_CHANNEL_ID}>!` });
-        } catch (err) {}
+        try { await i.user.send({ content: `✅ Your vouch has been successfully posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (err) {}
 
         return i.editReply({ content: `✅ Vouch posted!` });
       } catch (e) {
@@ -652,7 +680,6 @@ client.on('interactionCreate', async (i) => {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       await setupTicketPanel();
-      await sendLog('🛠️ Command Used', `<@${i.user.id}> refreshed the ticket panel.`, 0x5865f2);
       return i.editReply({ content: '✅ Ticket panel placed!' });
     }
     
@@ -660,7 +687,6 @@ client.on('interactionCreate', async (i) => {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       await setupVerify();
-      await sendLog('🛠️ Command Used', `<@${i.user.id}> refreshed the verify message.`, 0x5865f2);
       return i.editReply({ content: '✅ Verify message refreshed!' });
     }
 
@@ -668,25 +694,16 @@ client.on('interactionCreate', async (i) => {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       const amount = i.options.getInteger('amount');
-      
       try {
         const votes = await getLegitVotes();
         const current = votes.reject.length;
         if (current === 0) return i.editReply({ content: '⚠️ There are currently no crosses to remove.' });
-        
         const toRemove = Math.min(amount, current);
         votes.reject.splice(current - toRemove, toRemove);
         await saveLegitVotes(votes);
         await setupLegit();
-        
-        await sendLog('🧹 Crosses Removed', `<@${i.user.id}> removed **${toRemove}** ❌ vote(s) from the legit poll.`, 0xff4444, [
-          { name: 'Remaining ❌', value: `${votes.reject.length}`, inline: true }
-        ]);
-        
         return i.editReply({ content: `✅ Removed **${toRemove}** crosses.` });
-      } catch (e) { 
-        return i.editReply({ content: `❌ Error: ${e.message}` }); 
-      }
+      } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
     }
 
     const tickets = await getTickets();
@@ -708,11 +725,9 @@ client.on('interactionCreate', async (i) => {
         if (name === 'add') {
           await i.channel.permissionOverwrites.edit(targetUser.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true, AttachFiles: true });
           await i.channel.send({ content: `➕ <@${targetUser.id}> has been added by <@${i.user.id}>.` });
-          await sendLog('➕ User Added', `<@${i.user.id}> added <@${targetUser.id}> to **#${i.channel.name}**.`, 0x00ff88);
         } else {
           await i.channel.permissionOverwrites.delete(targetUser.id);
           await i.channel.send({ content: `➖ <@${targetUser.id}> has been removed by <@${i.user.id}>.` });
-          await sendLog('➖ User Removed', `<@${i.user.id}> removed <@${targetUser.id}> from **#${i.channel.name}**.`, 0xff4444);
         }
         await i.editReply({ content: '✅ Success.' });
       } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
@@ -725,9 +740,7 @@ client.on('interactionCreate', async (i) => {
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       const newName = i.options.getString('name').toLowerCase().replace(/[^a-z0-9-]/g, '-');
       try {
-        const oldName = i.channel.name;
         await i.channel.setName(newName);
-        await sendLog('✏️ Ticket Renamed', `<@${i.user.id}> renamed ticket **#${oldName}** to **#${newName}**.`, 0xf39c12);
         await i.editReply({ content: `✅ Renamed to ${newName}.` });
       } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
       return;
@@ -751,87 +764,196 @@ client.on('interactionCreate', async (i) => {
     }
   }
 
-  // Purchase flow handling
+  // Purchase flow handling (VOOR het ticket wordt aangemaakt)
   if (i.isStringSelectMenu()) {
-    const tickets = await getTickets();
-    const ticket = tickets[i.channelId];
+    const userId = i.user.id;
 
-    if (i.customId === 'purchase_section') {
-      const store = await getStoreData();
-      const section = i.values[0];
-      const services = store.sections[section] || [];
-      
-      if (services.length === 0) {
-        return i.update({ content: '❌ Geen services gevonden voor deze sectie.', components: [] });
+    if (i.customId === 'ticket_category_select') {
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      const choice = i.values[0];
+      const cat = TICKET_CATEGORIES[choice];
+      if (!cat) return i.editReply({ content: '❌ Unknown category.' });
+
+      if (choice === 'purchase') {
+        // Start de purchase flow VOOR we een ticket maken
+        const store = await getStoreData();
+        const sections = Object.keys(store.sections);
+        
+        if (sections.length === 0) {
+          return i.editReply({ content: '❌ No store sections configured yet. Please contact staff.' });
+        }
+
+        pendingPurchases.set(userId, { section: null, service: null, product: null, payment: null });
+
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId('purchase_section')
+          .setPlaceholder('Select a section')
+          .addOptions(sections.map(s => ({ label: s, value: s })));
+
+        return i.editReply({ 
+          content: 'Which section do you want to buy?', 
+          components: [new ActionRowBuilder().addComponents(menu)],
+        });
       }
 
+      // Als het geen purchase is, maak direct een ticket aan (Support of Bug)
+      try {
+        const guild = i.guild;
+        const tickets = await getTickets();
+        const existingTicket = Object.values(tickets).find(t => t.userId === userId);
+        if (existingTicket) {
+          return i.editReply({ content: `❌ You already have an open ticket.` });
+        }
+
+        const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
+        const overwrites = [
+          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+          { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
+        ];
+
+        const ticketChannel = await guild.channels.create({
+          name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}`,
+        });
+
+        await addTicket(ticketChannel.id, userId, choice);
+
+        const embed = new EmbedBuilder().setTitle(cat.name).setColor(cat.color).setDescription(`<@${userId}> — Please describe your question below.`).setTimestamp();
+        const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+
+        await ticketChannel.send({ content: `<@${userId}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
+        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
+      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+      return;
+    }
+
+    if (i.customId === 'purchase_section') {
+      const data = pendingPurchases.get(userId);
+      if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
+      
+      data.section = i.values[0];
+      const store = await getStoreData();
+      const services = store.sections[data.section] || [];
+      
+      if (services.length === 0) return i.update({ content: '❌ Geen services gevonden voor deze sectie.', components: [] });
+
       const menu = new StringSelectMenuBuilder()
-        .setCustomId(`purchase_service_${section}`)
+        .setCustomId('purchase_service')
         .setPlaceholder('What service do you want to buy?')
         .addOptions(services.map(s => ({ label: s, value: s })));
 
       return i.update({ content: 'What service do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
-    if (i.customId.startsWith('purchase_service_')) {
+    if (i.customId === 'purchase_service') {
+      const data = pendingPurchases.get(userId);
+      if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
+
+      data.service = i.values[0];
       const store = await getStoreData();
-      const service = i.values[0];
-      const products = store.services[service] || [];
+      const products = store.services[data.service] || [];
       
-      if (products.length === 0) {
-        return i.update({ content: '❌ Geen producten gevonden voor deze service.', components: [] });
-      }
+      if (products.length === 0) return i.update({ content: '❌ Geen producten gevonden voor deze service.', components: [] });
 
       const menu = new StringSelectMenuBuilder()
-        .setCustomId(`purchase_product_${service}`)
+        .setCustomId('purchase_product')
         .setPlaceholder('Which sort product do you want to buy?')
         .addOptions(products.map(p => ({ label: `${p} (${store.products[p]?.price || 'N/A'})`, value: p })));
 
       return i.update({ content: 'Which sort product do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
-    if (i.customId.startsWith('purchase_product_')) {
+    if (i.customId === 'purchase_product') {
+      const data = pendingPurchases.get(userId);
+      if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
+
+      data.product = i.values[0];
       const store = await getStoreData();
-      const product = i.values[0];
-      const price = store.products[product]?.price || 'N/A';
+      const price = store.products[data.product]?.price || 'N/A';
 
       const menu = new StringSelectMenuBuilder()
-        .setCustomId(`purchase_payment_${product}`)
+        .setCustomId('purchase_payment')
         .setPlaceholder('Select payment method')
         .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key })));
 
-      return i.update({ content: `You chose **${product}** for **${price}**. Select your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
+      return i.update({ content: `You chose **${data.product}** for **${price}**. Select your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
-    if (i.customId.startsWith('purchase_payment_')) {
-      const product = i.customId.replace('purchase_payment_', '');
-      const payment = i.values[0];
+    if (i.customId === 'purchase_payment') {
+      const data = pendingPurchases.get(userId);
+      if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
+
+      data.payment = i.values[0];
       const store = await getStoreData();
-      const price = store.products[product]?.price || 'N/A';
-      const paymentName = PAYMENT_METHODS[payment];
+      const price = store.products[data.product]?.price || 'N/A';
+      const paymentName = PAYMENT_METHODS[data.payment];
 
-      const embed = new EmbedBuilder()
-        .setTitle('🛒 Purchase Details')
-        .setColor(0x00ff88)
-        .setThumbnail(LOGO)
-        .setDescription(`Thank you for your order, <@${i.user.id}>! Please wait for a staff member to assist you.`)
-        .addFields(
-          { name: 'Product', value: product, inline: true },
-          { name: 'Price', value: price, inline: true },
-          { name: 'Payment Method', value: paymentName, inline: true }
-        )
-        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
-        .setTimestamp();
+      // Nu maken we het ticket aan
+      await i.update({ content: '✅ Creating your ticket...', components: [] });
 
-      await i.channel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed] });
-      await sendLog('🛒 Purchase Started', `<@${i.user.id}> started a purchase: **${product}** (${price}) via **${paymentName}**.`, 0x00ff88);
-      
-      return i.update({ content: '✅ Your purchase details have been sent to the staff!', components: [] });
+      try {
+        const guild = i.guild;
+        const tickets = await getTickets();
+        const existingTicket = Object.values(tickets).find(t => t.userId === userId);
+        if (existingTicket) {
+          pendingPurchases.delete(userId);
+          return i.editReply({ content: `❌ You already have an open ticket.` });
+        }
+
+        const cat = TICKET_CATEGORIES.purchase;
+        const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
+        const overwrites = [
+          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+          { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
+        ];
+
+        const ticketChannel = await guild.channels.create({
+          name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}`,
+        });
+
+        await addTicket(ticketChannel.id, userId, 'purchase', {
+          section: data.section,
+          service: data.service,
+          product: data.product,
+          price: price,
+          payment: paymentName
+        });
+
+        const embed = new EmbedBuilder()
+          .setTitle('🛒 Purchase Details')
+          .setColor(0x00ff88)
+          .setThumbnail(LOGO)
+          .setDescription(`Thank you for your order, <@${userId}>! Please wait for a staff member to assist you.`)
+          .addFields(
+            { name: 'Section', value: data.section, inline: true },
+            { name: 'Service', value: data.service, inline: true },
+            { name: 'Product', value: data.product, inline: true },
+            { name: 'Price', value: price, inline: true },
+            { name: 'Payment Method', value: paymentName, inline: true }
+          )
+          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+          .setTimestamp();
+
+        const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+
+        await ticketChannel.send({ content: `<@${userId}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
+        await sendLog('🛒 Purchase Started', `<@${userId}> started a purchase: **${data.product}** (${price}) via **${paymentName}**.`, 0x00ff88);
+        
+        pendingPurchases.delete(userId);
+        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
+      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+      return;
     }
 
     if (i.customId === 'move_ticket_select') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
+      
+      const tickets = await getTickets();
+      const ticket = tickets[i.channelId];
       if (!ticket) return i.editReply({ content: '❌ This is not an active ticket.' });
 
       const newCategoryId = i.values[0];
@@ -846,68 +968,7 @@ client.on('interactionCreate', async (i) => {
         if (newCatKey) await updateTicketCategory(i.channelId, newCatKey);
 
         await i.channel.send({ content: `📁 Ticket has been moved to **${newCategoryName}** by <@${i.user.id}>.` });
-        await sendLog('📁 Ticket Moved', `<@${i.user.id}> moved ticket **#${i.channel.name}** to **${newCategoryName}**.`, 0xf39c12);
         await i.editReply({ content: `✅ Moved to **${newCategoryName}**.` });
-      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
-      return;
-    }
-
-    if (i.customId === 'ticket_category_select') {
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const choice = i.values[0];
-      const cat = TICKET_CATEGORIES[choice];
-      if (!cat) return i.editReply({ content: '❌ Unknown category.' });
-
-      try {
-        const guild = i.guild;
-        const existingTicket = Object.values(tickets).find(t => t.userId === i.user.id);
-        if (existingTicket) {
-          return i.editReply({ content: `❌ You already have an open ticket.` });
-        }
-
-        const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
-        const overwrites = [
-          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
-          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
-          { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
-        ];
-
-        const ticketChannel = await guild.channels.create({
-          name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}`,
-        });
-
-        await addTicket(ticketChannel.id, i.user.id, choice);
-
-        const embed = new EmbedBuilder().setTitle(cat.name).setColor(cat.color).setDescription(`<@${i.user.id}> — Please describe your question below.`).setTimestamp();
-        const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-
-        await ticketChannel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
-        
-        await sendLog('🎫 New Ticket', `<@${i.user.id}> opened a new **${cat.name}** ticket.`, 0x00ff88, [
-          { name: 'Channel', value: `<#${ticketChannel.id}>`, inline: true }
-        ]);
-
-        if (choice === 'purchase') {
-          const store = await getStoreData();
-          const sections = Object.keys(store.sections);
-          
-          if (sections.length > 0) {
-            const menu = new StringSelectMenuBuilder()
-              .setCustomId('purchase_section')
-              .setPlaceholder('Select a section')
-              .addOptions(sections.map(s => ({ label: s, value: s })));
-
-            // BELANGRIJK: Geen ephemeral flag hier, zodat het in het kanaal staat!
-            await ticketChannel.send({ 
-              content: `<@${i.user.id}> Which section do you want to buy?`, 
-              components: [new ActionRowBuilder().addComponents(menu)],
-            });
-          }
-        }
-
-        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
-
       } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
       return;
     }
@@ -921,7 +982,6 @@ client.on('interactionCreate', async (i) => {
         await i.member.roles.add(VERIFIED_ROLE_ID);
         await i.reply({ content: '✅ You have accepted the rules and are now verified!', flags: MessageFlags.Ephemeral });
         await updateVerifyMessage();
-        await sendLog('✅ User Verified', `<@${i.user.id}> accepted the rules.`, 0x00ff88);
       } catch (e) { await i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
       return;
     }
@@ -939,8 +999,7 @@ client.on('interactionCreate', async (i) => {
         if (newConfirmed.length !== confirmed.length) await saveConfirmedRejects(newConfirmed);
         await saveLegitVotes(votes);
         await setupLegit();
-        await sendLog('🗳️ Legit Vote', `<@${i.user.id}> voted: **Legit (✅)**`, 0x5865f2);
-        try { await i.user.send({ content: `✅ Your vote has been saved as **Legit** in Prestige Market.` }); } catch (err) {}
+        try { await i.user.send({ content: `✅ Your vote has been saved as **Legit**.` }); } catch (err) {}
         await i.reply({ content: '✅ Your vote has been saved as **Legit**.', flags: MessageFlags.Ephemeral });
       } catch (e) { await i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
       return;
@@ -1016,12 +1075,10 @@ client.on('interactionCreate', async (i) => {
           await setNotLegitStatus(i.channelId, 'positive');
           await setupLegit();
           await i.channel.send({ content: `✅ Reviewed as **Positive**. ❌ vote has been added. Ticket is closing...` });
-          await sendLog('✅ Not-Legit Confirmed', `<@${targetUserId}> proof approved by <@${i.user.id}>.`, 0x00ff88);
           await i.editReply({ content: '✅ Reviewed as **Positive**. Ticket closing...' });
         } else {
           await setNotLegitStatus(i.channelId, 'false');
           await i.channel.send({ content: `❌ Reviewed as **False**. No vote added. Ticket is closing...` });
-          await sendLog('❌ Not-Legit Rejected', `<@${targetUserId}> proof rejected by <@${i.user.id}>.`, 0xff4444);
           await i.editReply({ content: '❌ Reviewed as **False**. Ticket closing...' });
         }
         await closeTicket(i.channel, i.user.id);
