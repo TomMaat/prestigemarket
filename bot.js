@@ -38,6 +38,7 @@ const VOUCH_CHANNEL_ID = '1564555149865656401';
 // Rollen
 const VERIFIED_ROLE_ID = '1564415134171013154';
 const VOUCH_ROLE_ID = '1564635023787950090';
+const NOT_LEGIT_TAG_ROLE_ID = '1564638227204149258'; // Alleen deze taggen bij Not Legit
 const STAFF_ROLE_IDS = [
   '1564419989002256516',
   '1564415131054772295',
@@ -46,12 +47,21 @@ const STAFF_ROLE_IDS = [
 ];
 
 // Ticket Categories
-const NOT_LEGIT_TICKET_CATEGORY_ID = '1564627295816122418'; 
+const NOT_LEGIT_TICKET_CATEGORY_ID = '1564632244235014315'; // Aangepast naar jouw ID
 const TICKET_CATEGORIES = {
   support: { name: 'Support', prefix: 'support', categoryId: '1564627077880094801', emoji: '🎫', color: 0x3498db },
   purchase: { name: 'Purchase', prefix: 'purchase', categoryId: '1564627178384007249', emoji: '🛒', color: 0x00ff88 },
   bug: { name: 'Bug', prefix: 'bug', categoryId: '1564627295816122418', emoji: '⚠️', color: 0xff4444 },
   notlegit: { name: 'Not Legit Proof', prefix: 'notlegit', categoryId: NOT_LEGIT_TICKET_CATEGORY_ID, emoji: '❌', color: 0xff4444 },
+};
+
+// Lijst met toegestane kanalen voor /move
+const ALLOWED_MOVE_CATEGORIES = {
+  '1564627077880094801': 'Support',
+  '1564627178384007249': 'Purchase',
+  '1564627295816122418': 'Bug',
+  '1564632244235014315': 'Not Legit Proof',
+  '1564636952676802700': 'Other/Archive'
 };
 
 // ===== De Regels =====
@@ -224,7 +234,6 @@ async function updateBotStatus() {
       client.user.setActivity(`${cachedVouches} Vouches`, { type: 3 }); 
     }
     
-    // Cycle tussen de 2 statussen
     statusState = (statusState + 1) % 2;
   } catch (error) {
     console.error("Failed to update status:", error);
@@ -312,7 +321,7 @@ async function updateVerifyMessage() {
     if (!messageId) return;
 
     const guild = channel.guild;
-    await guild.members.fetch(); // Forceer member cache update
+    await guild.members.fetch();
     
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
     const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
@@ -350,8 +359,6 @@ async function setupVerify() {
     for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
 
     const guild = channel.guild;
-    
-    // Forceer member cache update
     await guild.members.fetch();
 
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
@@ -489,11 +496,7 @@ const commands = [
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'close', description: 'Close this ticket' },
   { name: 'rename', description: 'Rename this ticket', options: [{ name: 'name', description: 'New name', type: 3, required: true }] },
-  { 
-    name: 'move', 
-    description: 'Move this ticket to another category', 
-    options: [{ name: 'category', description: 'The new category', type: 7, required: true }] 
-  },
+  { name: 'move', description: 'Move this ticket to another category' },
   { name: 'ticketpanel', description: 'Place the ticket panel' },
   { name: 'refreshverify', description: 'Refresh the verify message' },
   { name: 'removekruis', description: 'Remove ❌ votes from the legit poll', options: [{ name: 'amount', description: 'How many crosses to remove?', type: 4, required: true, min_value: 1 }] }
@@ -653,40 +656,58 @@ client.on('interactionCreate', async (i) => {
     if (name === 'move') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
       if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
       
-      const newCategory = i.options.getChannel('category');
-      
-      if (newCategory.type !== ChannelType.GuildCategory) {
-        return i.editReply({ content: '❌ The selected channel is not a category.' });
-      }
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('move_ticket_select')
+        .setPlaceholder('Kies een categorie...')
+        .addOptions(Object.entries(ALLOWED_MOVE_CATEGORIES).map(([id, name]) => ({
+          label: name,
+          value: id
+        })));
 
-      try {
-        await i.channel.setParent(newCategory.id, { lockPermissions: false });
-        
-        let newCatKey = null;
-        for (const [key, cat] of Object.entries(TICKET_CATEGORIES)) {
-          if (cat.categoryId === newCategory.id) {
-            newCatKey = key;
-            break;
-          }
-        }
+      const row = new ActionRowBuilder().addComponents(selectMenu);
 
-        if (newCatKey) {
-          await updateTicketCategory(i.channelId, newCatKey);
-        }
-
-        await i.channel.send({ content: `📁 Ticket has been moved to **${newCategory.name}** by <@${i.user.id}>.` });
-        await sendLog('📁 Ticket Moved', `<@${i.user.id}> moved ticket **#${i.channel.name}** to **${newCategory.name}**.`, 0xf39c12, [
-          { name: 'From', value: ticket.categorie || 'Unknown', inline: true },
-          { name: 'To', value: newCategory.name, inline: true }
-        ]);
-        await i.editReply({ content: `✅ Moved to **${newCategory.name}**.` });
-      } catch (e) {
-        await i.editReply({ content: `❌ Error: ${e.message}` });
-      }
-      return;
+      return i.reply({ content: 'Kies de categorie waar je dit ticket naartoe wilt verplaatsen:', components: [row], flags: MessageFlags.Ephemeral });
     }
+  }
+
+  if (i.isStringSelectMenu() && i.customId === 'move_ticket_select') {
+    if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+    
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    
+    const tickets = await getTickets();
+    const ticket = tickets[i.channelId];
+    if (!ticket) return i.editReply({ content: '❌ This is not an active ticket.' });
+
+    const newCategoryId = i.values[0];
+    const newCategoryName = ALLOWED_MOVE_CATEGORIES[newCategoryId];
+
+    try {
+      await i.channel.setParent(newCategoryId, { lockPermissions: false });
+      
+      let newCatKey = null;
+      for (const [key, cat] of Object.entries(TICKET_CATEGORIES)) {
+        if (cat.categoryId === newCategoryId) {
+          newCatKey = key;
+          break;
+        }
+      }
+
+      if (newCatKey) {
+        await updateTicketCategory(i.channelId, newCatKey);
+      }
+
+      await i.channel.send({ content: `📁 Ticket has been moved to **${newCategoryName}** by <@${i.user.id}>.` });
+      await sendLog('📁 Ticket Moved', `<@${i.user.id}> moved ticket **#${i.channel.name}** to **${newCategoryName}**.`, 0xf39c12, [
+        { name: 'From', value: ticket.categorie || 'Unknown', inline: true },
+        { name: 'To', value: newCategoryName, inline: true }
+      ]);
+      await i.editReply({ content: `✅ Moved to **${newCategoryName}**.` });
+    } catch (e) {
+      await i.editReply({ content: `❌ Error: ${e.message}` });
+    }
+    return;
   }
 
   if (i.isStringSelectMenu() && i.customId === 'ticket_category_select') {
@@ -815,11 +836,10 @@ client.on('interactionCreate', async (i) => {
           topic: `Not-Legit proof from ${i.user.tag}`,
         });
 
-        for (const roleId of STAFF_ROLE_IDS) {
-          await ticketChannel.permissionOverwrites.edit(roleId, {
-            ViewChannel: true, SendMessages: true, ReadMessageHistory: true, ManageMessages: true
-          }).catch(() => {});
-        }
+        // Alleen de NOT_LEGIT_TAG_ROLE_ID krijgt toegang
+        await ticketChannel.permissionOverwrites.edit(NOT_LEGIT_TAG_ROLE_ID, {
+          ViewChannel: true, SendMessages: true, ReadMessageHistory: true, ManageMessages: true
+        }).catch(() => {});
 
         await addTicket(ticketChannel.id, i.user.id, 'notlegit');
 
@@ -852,7 +872,7 @@ client.on('interactionCreate', async (i) => {
         );
 
         await ticketChannel.send({
-          content: `<@${i.user.id}> ${STAFF_ROLE_IDS.map(id => `<@&${id}>`).join(' ')}`,
+          content: `<@${i.user.id}> <@&${NOT_LEGIT_TAG_ROLE_ID}>`, // Alleen deze tag
           embeds: [promptEmbed],
           components: [reviewRow, closeRow],
         });
