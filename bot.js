@@ -41,6 +41,7 @@ const STORE_PANEL_CHANNEL_ID = '1564761625104490607';
 const RECENT_PAYMENTS_CHANNEL_ID = '1564761373026681205';
 const EARNINGS_PANEL_CHANNEL_ID = '1564761453402263572';
 const PAYMENT_METHODS_CHANNEL_ID = '1564552449585586186';
+const GIVEAWAY_CHANNEL_ID = '1564415334658744443';
 
 // Earnings Users
 const EARNER_1_ID = '710623438657683486';
@@ -157,6 +158,8 @@ async function readGist() {
       earnings: { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 },
       earningsMessageId: null,
       paymentMethodsMessageId: null,
+      giveaways: {},
+      giveawayEntries: {},
     };
   }
 
@@ -174,6 +177,8 @@ async function readGist() {
     earnings: parsed.earnings || { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 },
     earningsMessageId: parsed.earningsMessageId || null,
     paymentMethodsMessageId: parsed.paymentMethodsMessageId || null,
+    giveaways: parsed.giveaways || {},
+    giveawayEntries: parsed.giveawayEntries || {},
   };
 }
 
@@ -248,6 +253,11 @@ async function setEarningsMessageId(id) { const d = await readGist(); d.earnings
 async function getPaymentMethodsMessageId() { const d = await readGist(); return d.paymentMethodsMessageId; }
 async function setPaymentMethodsMessageId(id) { const d = await readGist(); d.paymentMethodsMessageId = id; await writeGist(d); }
 
+async function getGiveaways() { const d = await readGist(); return d.giveaways || {}; }
+async function saveGiveaways(g) { const d = await readGist(); d.giveaways = g; await writeGist(d); }
+async function getGiveawayEntries() { const d = await readGist(); return d.giveawayEntries || {}; }
+async function saveGiveawayEntries(e) { const d = await readGist(); d.giveawayEntries = e; await writeGist(d); }
+
 // ===== HELPERS =====
 function isStaff(member) {
   return member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
@@ -287,6 +297,15 @@ async function sendLog(title, description, color = 0x5865f2, fields = []) {
   } catch (e) {
     console.error('Failed to send log:', e.message);
   }
+}
+
+function parseDuration(str) {
+  const match = str.match(/^(\d+)(s|m|h|d)$/i);
+  if (!match) return null;
+  const amount = parseInt(match[1]);
+  const unit = match[2].toLowerCase();
+  const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  return amount * multipliers[unit];
 }
 
 // ===== STATUS SYSTEM =====
@@ -538,6 +557,90 @@ async function setupPaymentMethods() {
     await setPaymentMethodsMessageId(newMsg.id);
     console.log('✅ Payment methods placed');
   } catch (e) { console.error('Payment methods error:', e.message); }
+}
+
+// ===== GIVEAWAY SYSTEM =====
+async function runGiveaway(channel, winners, product, durationMs, blacklistRoles) {
+  try {
+    const endsAt = Date.now() + durationMs;
+    const embed = new EmbedBuilder()
+      .setTitle('🎉 GIVEAWAY 🎉')
+      .setColor(0xffaa00)
+      .setDescription(
+        `**Prize:** ${product}\n` +
+        `**Winners:** ${winners}\n` +
+        `**Ends:** <t:${Math.floor(endsAt / 1000)}:R>\n\n` +
+        `Click the button below to join!`
+      )
+      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+      .setTimestamp();
+
+    const joinBtn = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('giveaway_join').setLabel('Join Giveaway').setEmoji('🎉').setStyle(ButtonStyle.Success)
+    );
+
+    const msg = await channel.send({ embeds: [embed], components: [joinBtn] });
+
+    const giveaways = await getGiveaways();
+    giveaways[msg.id] = {
+      product,
+      winners,
+      channelId: channel.id,
+      endsAt,
+      blacklistRoles: blacklistRoles || [],
+      active: true,
+      participants: [],
+    };
+    await saveGiveaways(giveaways);
+
+    setTimeout(async () => {
+      const g = await getGiveaways();
+      const giveaway = g[msg.id];
+      if (!giveaway || !giveaway.active) return;
+
+      const entries = giveaway.participants || [];
+      const filtered = entries.filter(id => {
+        return !giveaway.blacklistRoles.some(roleId => {
+          const member = channel.guild.members.cache.get(id);
+          return member && member.roles.cache.has(roleId);
+        });
+      });
+
+      if (filtered.length === 0) {
+        await channel.send({ content: `❌ No valid participants for the giveaway of **${giveaway.product}**.` });
+        giveaway.active = false;
+        await saveGiveaways(g);
+        return;
+      }
+
+      const shuffled = filtered.sort(() => Math.random() - 0.5);
+      const selectedWinners = shuffled.slice(0, giveaway.winners);
+
+      giveaway.active = false;
+      giveaway.finished = true;
+      giveaway.winnersList = selectedWinners;
+      await saveGiveaways(g);
+
+      const winnerMentions = selectedWinners.map(id => `<@${id}>`).join(', ');
+
+      const resultEmbed = new EmbedBuilder()
+        .setTitle('🎉 Giveaway Ended 🎉')
+        .setColor(0x00ff88)
+        .setDescription(
+          `**Prize:** ${giveaway.product}\n` +
+          `**Winners:** ${winnerMentions}\n\n` +
+          `Congratulations!`
+        )
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      const rerollBtn = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`giveaway_reroll_${msg.id}`).setLabel('Reroll').setEmoji('🔄').setStyle(ButtonStyle.Secondary)
+      );
+
+      await channel.send({ content: `🎉 Congratulations ${winnerMentions}! You won **${giveaway.product}**!`, embeds: [resultEmbed], components: [rerollBtn] });
+    }, durationMs);
+  } catch (e) { console.error('Giveaway error:', e.message); }
 }
 
 // ===== STORE MANAGEMENT SYSTEM =====
@@ -799,6 +902,12 @@ const commands = [
   ] },
   { name: 'resetearned', description: 'Reset all earnings to 0' },
   { name: 'clearallproducts', description: 'Clear all products and store data' },
+  { name: 'giveaway', description: 'Start a giveaway', options: [
+      { name: 'winners', description: 'Amount of winners', type: 4, required: true, min_value: 1 },
+      { name: 'product', description: 'What is the prize?', type: 3, required: true },
+      { name: 'time', description: 'Duration (e.g. 10m, 1h, 1d)', type: 3, required: true },
+      { name: 'blacklist_roles', description: 'Roles that cannot win (mention them, separated by spaces)', type: 3, required: false }
+  ] },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'close', description: 'Close this ticket' },
@@ -845,6 +954,27 @@ client.on('interactionCreate', async (i) => {
       await saveStoreData(emptyStore);
       await updateStorePanel();
       return i.editReply({ content: '✅ All products, services, and sections have been cleared!' });
+    }
+
+    if (name === 'giveaway') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const winners = i.options.getInteger('winners');
+      const product = i.options.getString('product');
+      const timeStr = i.options.getString('time');
+      const blacklistRolesRaw = i.options.getString('blacklist_roles') || '';
+
+      const duration = parseDuration(timeStr);
+      if (!duration) return i.editReply({ content: '❌ Invalid time format. Use `10m`, `1h`, `1d`, etc.' });
+
+      const blacklistRoles = blacklistRolesRaw.split(/\s+/).map(r => r.replace(/[<@&>]/g, '')).filter(Boolean);
+      
+      const channel = await client.channels.fetch(GIVEAWAY_CHANNEL_ID).catch(() => null);
+      if (!channel) return i.editReply({ content: '❌ Giveaway channel not found.' });
+
+      await runGiveaway(channel, winners, product, duration, blacklistRoles);
+      return i.editReply({ content: `✅ Giveaway started in <#${GIVEAWAY_CHANNEL_ID}>!` });
     }
 
     if (name === 'setupstore') {
@@ -1393,6 +1523,48 @@ client.on('interactionCreate', async (i) => {
       await updateStorePanel();
       
       return i.reply({ content: `✅ Price for **${product}** has been updated.`, flags: MessageFlags.Ephemeral });
+    }
+
+    if (i.customId.startsWith('giveaway_reroll_modal_')) {
+      const messageId = i.customId.replace('giveaway_reroll_modal_', '');
+      const amount = parseInt(i.fields.getTextInputValue('reroll_amount'));
+
+      if (isNaN(amount) || amount <= 0) {
+        return i.reply({ content: '❌ Invalid amount.', flags: MessageFlags.Ephemeral });
+      }
+
+      const giveaways = await getGiveaways();
+      const giveaway = giveaways[messageId];
+      if (!giveaway) return i.reply({ content: '❌ Giveaway not found.', flags: MessageFlags.Ephemeral });
+
+      const entries = giveaway.participants || [];
+      const filtered = entries.filter(id => !giveaway.winnersList.includes(id));
+      
+      if (filtered.length === 0) {
+        return i.reply({ content: '❌ No new participants to reroll from.', flags: MessageFlags.Ephemeral });
+      }
+
+      const shuffled = filtered.sort(() => Math.random() - 0.5);
+      const newWinners = shuffled.slice(0, amount);
+
+      giveaway.winnersList = newWinners;
+      await saveGiveaways(giveaways);
+
+      const winnerMentions = newWinners.map(id => `<@${id}>`).join(', ');
+
+      const resultEmbed = new EmbedBuilder()
+        .setTitle('🔄 Giveaway Rerolled 🔄')
+        .setColor(0xffaa00)
+        .setDescription(
+          `**Prize:** ${giveaway.product}\n` +
+          `**New Winners:** ${winnerMentions}\n\n` +
+          `Congratulations!`
+        )
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      await i.channel.send({ content: `🔄 Rerolled! Congratulations ${winnerMentions}!`, embeds: [resultEmbed] });
+      return i.reply({ content: '✅ Winners rerolled!', flags: MessageFlags.Ephemeral });
     }
   }
 
@@ -2108,6 +2280,34 @@ client.on('interactionCreate', async (i) => {
       await closeTicket(i.channel, i.user.id);
       return;
     }
+
+    if (i.customId === 'giveaway_join') {
+      const giveaways = await getGiveaways();
+      const giveaway = giveaways[i.message.id];
+      if (!giveaway || !giveaway.active) return i.reply({ content: '❌ This giveaway has ended.', flags: MessageFlags.Ephemeral });
+
+      if (giveaway.blacklistRoles && giveaway.blacklistRoles.some(roleId => i.member.roles.cache.has(roleId))) {
+        return i.reply({ content: '❌ You are not eligible to join this giveaway.', flags: MessageFlags.Ephemeral });
+      }
+
+      if (giveaway.participants.includes(i.user.id)) {
+        return i.reply({ content: '❌ You have already joined this giveaway!', flags: MessageFlags.Ephemeral });
+      }
+
+      giveaway.participants.push(i.user.id);
+      await saveGiveaways(giveaways);
+      return i.reply({ content: '✅ You have joined the giveaway! Good luck!', flags: MessageFlags.Ephemeral });
+    }
+
+    if (i.customId.startsWith('giveaway_reroll_')) {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      const messageId = i.customId.replace('giveaway_reroll_', '');
+
+      const modal = new ModalBuilder().setCustomId(`giveaway_reroll_modal_${messageId}`).setTitle('Reroll Giveaway');
+      const input = new TextInputBuilder().setCustomId('reroll_amount').setLabel('How many winners do you want to reroll?').setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return i.showModal(modal);
+    }
   }
 });
 
@@ -2164,8 +2364,12 @@ client.once('ready', async () => {
     store.serviceChannels['Streaming'] = '1564628292269772892';
     await saveStoreData(store);
   }
-  if (store.serviceChannels?.['Streaming']) {
-    await updateServiceShop('Streaming');
+  
+  // Update alle gekoppelde services
+  if (store.serviceChannels) {
+    for (const serviceName of Object.keys(store.serviceChannels)) {
+      await updateServiceShop(serviceName);
+    }
   }
 });
 
