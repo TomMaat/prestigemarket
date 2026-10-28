@@ -222,6 +222,19 @@ function isStaff(member) {
   return member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
 }
 
+function formatPrice(priceStr) {
+  if (!priceStr) return 'N/A';
+  let clean = priceStr.toString().trim();
+  if (clean.toLowerCase() === 'n/a' || clean === '') return 'N/A';
+  // Verwijder eventuele bestaande euro tekens en spaties voor de check
+  const check = clean.replace(/€/g, '').trim();
+  // Voeg € toe als het er nog niet in zit
+  if (!clean.includes('€')) {
+    clean = `€${clean}`;
+  }
+  return clean;
+}
+
 async function sendLog(title, description, color = 0x5865f2, fields = []) {
   try {
     const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
@@ -422,40 +435,27 @@ function buildStoreEmbed(store) {
     return embed;
   }
 
-  const IND1 = '    ';
-  const IND2 = '        ';
-  const IND3 = '            ';
-  const IND4 = '                ';
-
   for (const [section, services] of Object.entries(store.sections)) {
     let sectionText = '';
 
     if (services.length === 0) {
-      sectionText += `${IND2}└ *No services*\n`;
+      sectionText += `↳ *No services*\n`;
     } else {
-      services.forEach((service, sIndex) => {
-        const isLastService = sIndex === services.length - 1;
-        const serviceBranch = isLastService ? '└' : '├';
-        const serviceIndent = isLastService ? IND2 : IND2 + '│ ';
-
-        sectionText += `${IND2}${serviceBranch} **${service}**\n`;
+      services.forEach((service) => {
+        sectionText += `• **${service}**\n`;
 
         const products = store.services[service] || [];
         if (products.length === 0) {
-          sectionText += `${serviceIndent}${IND3}└ *No products*\n`;
+          sectionText += `  ↳ *No products*\n`;
         } else {
-          products.forEach((prod, pIndex) => {
-            const isLastProduct = pIndex === products.length - 1;
-            const productBranch = isLastProduct ? '└' : '├';
-            const productIndent = isLastProduct ? IND3 : IND3 + '│ ';
-
-            sectionText += `${serviceIndent}${productBranch} ${prod}\n`;
+          products.forEach((prod) => {
+            sectionText += `  ↳ ${prod}\n`;
 
             const p = store.products[prod];
-            const price = p?.price || 'N/A';
+            const price = formatPrice(p?.price);
             const amount = p?.amount ? ` per ${p.amount}` : '';
 
-            sectionText += `${serviceIndent}${productIndent}└ 💰 ${price}${amount}\n`;
+            sectionText += `      ↳ 💰 ${price}${amount}\n`;
           });
         }
       });
@@ -816,11 +816,11 @@ client.on('interactionCreate', async (i) => {
       const price = i.fields.getTextInputValue('product_price');
       const store = await getStoreData();
       if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
-      store.products[product].price = price;
+      store.products[product].price = price; // Wordt automatisch geformatteerd bij weergave
       store.products[product].amount = '';
       await saveStoreData(store);
       await updateStorePanel();
-      return i.reply({ content: `✅ Single price for **${product}** set to **${price}**.`, flags: MessageFlags.Ephemeral });
+      return i.reply({ content: `✅ Single price for **${product}** set to **${formatPrice(price)}**.`, flags: MessageFlags.Ephemeral });
     }
 
     // Price per amount
@@ -830,11 +830,11 @@ client.on('interactionCreate', async (i) => {
       const amount = i.fields.getTextInputValue('product_amount');
       const store = await getStoreData();
       if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
-      store.products[product].price = price;
+      store.products[product].price = price; // Wordt automatisch geformatteerd bij weergave
       store.products[product].amount = amount;
       await saveStoreData(store);
       await updateStorePanel();
-      return i.reply({ content: `✅ Price for **${product}** set to **${price}** per **${amount}**.`, flags: MessageFlags.Ephemeral });
+      return i.reply({ content: `✅ Price for **${product}** set to **${formatPrice(price)}** per **${amount}**.`, flags: MessageFlags.Ephemeral });
     }
 
     if (i.customId.startsWith('modal_purchase_amount_')) {
@@ -848,27 +848,30 @@ client.on('interactionCreate', async (i) => {
 
       const store = await getStoreData();
       const prodData = store.products[product];
-      if (!prodData || prodData.price === 'N/A') {
+      if (!prodData || !prodData.price || prodData.price === 'N/A') {
         return i.reply({ content: '❌ Price not set for this product.', flags: MessageFlags.Ephemeral });
       }
 
-      const pricePer = parseFloat(prodData.price.replace('€', '').trim());
+      // Verwijder euro teken voor de berekening
+      const cleanPrice = prodData.price.toString().replace('€', '').replace(',', '.').trim();
+      const pricePer = parseFloat(cleanPrice);
       const amountPer = prodData.amount ? parseInt(prodData.amount) : 1;
-      const total = ((pricePer / amountPer) * quantity).toFixed(2);
+      const total = ((pricePer / amountPer) * quantity).toFixed(2).replace('.', ',');
+      const formattedTotal = `€${total}`;
 
       const data = pendingPurchases.get(i.user.id);
       if (!data) return i.reply({ content: '❌ Session expired.', flags: MessageFlags.Ephemeral });
 
       data.product = product;
       data.quantity = quantity;
-      data.total = `€${total}`;
+      data.total = formattedTotal;
 
       const menu = new StringSelectMenuBuilder()
         .setCustomId('purchase_payment')
         .setPlaceholder('Select payment method')
         .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key })));
 
-      return i.update({ content: `You want **${quantity}** of **${product}**. Total: **€${total}**.\n\nSelect your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
+      return i.update({ content: `You want **${quantity}** of **${product}**. Total: **${formattedTotal}**.\n\nSelect your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
   }
 
@@ -940,13 +943,13 @@ client.on('interactionCreate', async (i) => {
 
       if (choice === 'single') {
         const modal = new ModalBuilder().setCustomId(`modal_add_price_single_${product}`).setTitle('Add Single Price');
-        const input = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. €5.00)').setStyle(TextInputStyle.Short).setRequired(true);
+        const input = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setRequired(true);
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         return i.showModal(modal);
       }
 
       const modal = new ModalBuilder().setCustomId(`modal_add_price_amount_${product}`).setTitle('Add Price Per Amount');
-      const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. €5.00)').setStyle(TextInputStyle.Short).setRequired(true);
+      const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setRequired(true);
       const input2 = new TextInputBuilder().setCustomId('product_amount').setLabel('Amount (e.g. 1000)').setStyle(TextInputStyle.Short).setRequired(true);
       modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
       return i.showModal(modal);
@@ -993,7 +996,7 @@ client.on('interactionCreate', async (i) => {
         const menu = new StringSelectMenuBuilder()
           .setCustomId('store_remove_price')
           .setPlaceholder('Select a product price to remove')
-          .addOptions(products.map(([name, p]) => ({ label: `${name} (${p.price || 'N/A'})`, value: name })));
+          .addOptions(products.map(([name, p]) => ({ label: `${name} (${formatPrice(p.price)})`, value: name })));
         return i.update({ content: '🗑️ Which **price** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
       }
       return;
@@ -1129,7 +1132,7 @@ client.on('interactionCreate', async (i) => {
         .setPlaceholder('Which product do you want to buy?')
         .addOptions(products.map(p => {
           const pd = store.products[p];
-          const priceLabel = pd?.amount ? `${pd.price || 'N/A'} per ${pd.amount}` : (pd?.price || 'N/A');
+          const priceLabel = pd?.amount ? `${formatPrice(pd.price)} per ${pd.amount}` : formatPrice(pd?.price);
           return { label: `${p} (${priceLabel})`, value: p };
         }));
 
@@ -1144,14 +1147,14 @@ client.on('interactionCreate', async (i) => {
       const store = await getStoreData();
       const prod = store.products[data.product];
 
-      if (!prod || prod.price === 'N/A') {
+      if (!prod || !prod.price || prod.price === 'N/A') {
         return i.update({ content: '❌ Price not set for this product.', components: [] });
       }
 
       const amountLabel = prod.amount ? ` per ${prod.amount}` : '';
 
       const modal = new ModalBuilder().setCustomId(`modal_purchase_amount_${data.product}`).setTitle('Enter Quantity');
-      const input = new TextInputBuilder().setCustomId('quantity').setLabel(`How many? (Price: ${prod.price}${amountLabel})`).setStyle(TextInputStyle.Short).setRequired(true);
+      const input = new TextInputBuilder().setCustomId('quantity').setLabel(`How many? (Price: ${formatPrice(prod.price)}${amountLabel})`).setStyle(TextInputStyle.Short).setRequired(true);
       modal.addComponents(new ActionRowBuilder().addComponents(input));
       return i.showModal(modal);
     }
@@ -1206,7 +1209,7 @@ client.on('interactionCreate', async (i) => {
             { name: 'Service', value: data.service, inline: true },
             { name: 'Product', value: data.product, inline: true },
             { name: 'Quantity', value: `${data.quantity}`, inline: true },
-            { name: 'Total Price', value: data.total, inline: true },
+            { name: 'Total Price', value: data.total, inline: true }, // <-- Hier wordt de geformatteerde totaalprijs gebruikt
             { name: 'Payment Method', value: paymentName, inline: true }
           )
           .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
