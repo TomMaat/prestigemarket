@@ -64,11 +64,13 @@ const CLEAR_PRODUCTS_ROLE_ID = '1564415129955729418';
 // Categories
 const NOT_LEGIT_TICKET_CATEGORY_ID = '1564632244235014315';
 const ARCHIVE_CATEGORY_ID = '1564636952676802700';
+const PARTNER_CATEGORY_ID = '1565123254887252229';
 
 const TICKET_CATEGORIES = {
   support: { name: 'Support', prefix: 'support', categoryId: '1564627077880094801', emoji: '🎫', color: 0x3498db },
   purchase: { name: 'Purchase', prefix: 'purchase', categoryId: '1564627178384007249', emoji: '🛒', color: 0x00ff88 },
   bug: { name: 'Bug', prefix: 'bug', categoryId: '1564627295816122418', emoji: '⚠️', color: 0xff4444 },
+  partner: { name: 'Partner', prefix: 'partner', categoryId: PARTNER_CATEGORY_ID, emoji: '🤝', color: 0x9b59b6 },
   notlegit: { name: 'Not Legit Proof', prefix: 'notlegit', categoryId: NOT_LEGIT_TICKET_CATEGORY_ID, emoji: '❌', color: 0xff4444 },
 };
 
@@ -77,7 +79,8 @@ const ALLOWED_MOVE_CATEGORIES = {
   '1564627178384007249': 'Purchase',
   '1564627295816122418': 'Bug',
   '1564632244235014315': 'Not Legit Proof',
-  '1564636952676802700': 'Other/Archive'
+  '1564636952676802700': 'Other/Archive',
+  '1565123254887252229': 'Partner'
 };
 
 const PAYMENT_METHODS = {
@@ -585,7 +588,6 @@ function buildStoreEmbed(store) {
   return embed;
 }
 
-// HIER IS DE FIX: 2 aparte ActionRows om onder de limiet van 5 knoppen te blijven
 function buildStoreRows() {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('store_add_section').setLabel('Add Section').setEmoji('➕').setStyle(ButtonStyle.Primary),
@@ -695,7 +697,7 @@ function buildTicketPanelEmbed() {
   return new EmbedBuilder()
     .setTitle('🎫 Prestige Support')
     .setColor(0x5865f2)
-    .setDescription('Select a category below to open a ticket.\n\n> 🎫 **Support**\n> 🛒 **Purchase**\n> ⚠️ **Bug**')
+    .setDescription('Select a category below to open a ticket.\n\n> 🎫 **Support**\n> 🛒 **Purchase**\n> ⚠️ **Bug**\n> 🤝 **Partner**')
     .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
     .setThumbnail(LOGO);
 }
@@ -709,6 +711,7 @@ function buildTicketPanelMenu() {
         { label: 'Support', value: 'support', emoji: '🎫' },
         { label: 'Purchase', value: 'purchase', emoji: '🛒' },
         { label: 'Bug', value: 'bug', emoji: '⚠️' },
+        { label: 'Partner', value: 'partner', emoji: '🤝' },
       ])
   );
 }
@@ -1283,7 +1286,58 @@ client.on('interactionCreate', async (i) => {
       return i.update({ content: `You want **${quantity}** of **${product}**. Total: **${formattedTotal}**.\n\nSelect your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
-    // === EDIT MODALS ===
+    // === TICKET MODALS (Support, Bug, Partner) ===
+    if (i.customId.startsWith('modal_create_ticket_')) {
+      const category = i.customId.replace('modal_create_ticket_', '');
+      const cat = TICKET_CATEGORIES[category];
+      if (!cat) return i.reply({ content: '❌ Unknown category.', flags: MessageFlags.Ephemeral });
+
+      const questionAnswer = i.fields.getTextInputValue('question_answer');
+      const questionAnswer2 = category === 'partner' ? i.fields.getTextInputValue('question_answer_2') : null;
+
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+
+      try {
+        const guild = i.guild;
+        const tickets = await getTickets();
+        const existingTicket = Object.values(tickets).find(t => t.userId === i.user.id);
+        if (existingTicket) {
+          return i.editReply({ content: '❌ You already have an open ticket.' });
+        }
+
+        const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
+        const overwrites = [
+          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+          { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
+        ];
+
+        const ticketChannel = await guild.channels.create({
+          name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}`,
+        });
+
+        await addTicket(ticketChannel.id, i.user.id, category);
+
+        const embed = new EmbedBuilder()
+          .setTitle(cat.name)
+          .setColor(cat.color)
+          .setDescription(`<@${i.user.id}> — Thank you for opening a ticket. Please wait for a staff member to assist you.`)
+          .addFields({ name: 'Your Answer', value: questionAnswer })
+          .setTimestamp();
+
+        if (questionAnswer2) {
+          embed.addFields({ name: 'Second Answer', value: questionAnswer2 });
+        }
+
+        const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+
+        await ticketChannel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
+        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
+      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+      return;
+    }
+
     if (i.customId.startsWith('edit_service_modal_')) {
       const oldName = i.customId.replace('edit_service_modal_', '');
       const newName = i.fields.getTextInputValue('new_name');
@@ -1360,12 +1414,12 @@ client.on('interactionCreate', async (i) => {
     }
 
     if (i.customId === 'ticket_category_select') {
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
       const choice = i.values[0];
       const cat = TICKET_CATEGORIES[choice];
-      if (!cat) return i.editReply({ content: '❌ Unknown category.' });
+      if (!cat) return i.reply({ content: '❌ Unknown category.', flags: MessageFlags.Ephemeral });
 
       if (choice === 'purchase') {
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
         const store = await getStoreData();
         const sections = Object.keys(store.sections);
 
@@ -1386,6 +1440,22 @@ client.on('interactionCreate', async (i) => {
         });
       }
 
+      if (choice === 'support' || choice === 'bug') {
+        const modal = new ModalBuilder().setCustomId(`modal_create_ticket_${choice}`).setTitle(`${cat.name} Ticket`);
+        const input = new TextInputBuilder().setCustomId('question_answer').setLabel('Describe your issue / question').setStyle(TextInputStyle.Paragraph).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return i.showModal(modal);
+      }
+
+      if (choice === 'partner') {
+        const modal = new ModalBuilder().setCustomId(`modal_create_ticket_${choice}`).setTitle(`${cat.name} Ticket`);
+        const input1 = new TextInputBuilder().setCustomId('question_answer').setLabel('Why do you want to become a partner?').setStyle(TextInputStyle.Paragraph).setRequired(true);
+        const input2 = new TextInputBuilder().setCustomId('question_answer_2').setLabel('What benefits do we have being partners?').setStyle(TextInputStyle.Paragraph).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
+        return i.showModal(modal);
+      }
+
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
       try {
         const guild = i.guild;
         const tickets = await getTickets();
@@ -1744,7 +1814,6 @@ client.on('interactionCreate', async (i) => {
       return;
     }
 
-    // === EDIT SELECTS ===
     if (i.customId === 'store_edit_type') {
       const type = i.values[0];
       const store = await getStoreData();
