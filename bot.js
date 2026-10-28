@@ -50,8 +50,16 @@ const STAFF_ROLE_IDS = [
   MAIN_TAG_ROLE_ID
 ];
 
-// Ticket Categories
+// Specifieke rollen voor payment/delivered commando's
+const PAYMENT_ROLE_IDS = [
+  '1564415129955729418',
+  '1564415131054772295'
+];
+
+// Categories
 const NOT_LEGIT_TICKET_CATEGORY_ID = '1564632244235014315';
+const ARCHIVE_CATEGORY_ID = '1564636952676802700';
+
 const TICKET_CATEGORIES = {
   support: { name: 'Support', prefix: 'support', categoryId: '1564627077880094801', emoji: '🎫', color: 0x3498db },
   purchase: { name: 'Purchase', prefix: 'purchase', categoryId: '1564627178384007249', emoji: '🛒', color: 0x00ff88 },
@@ -69,6 +77,7 @@ const ALLOWED_MOVE_CATEGORIES = {
 
 const PAYMENT_METHODS = {
   ideal: 'iDeal',
+  tikkie: 'Tikkie',
   paypal: 'PayPal',
   crypto: 'Crypto (LTC)',
   bank: 'Bank Transfer'
@@ -222,13 +231,15 @@ function isStaff(member) {
   return member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
 }
 
+function isPaymentStaff(member) {
+  return member && PAYMENT_ROLE_IDS.some(id => member.roles.cache.has(id));
+}
+
 function formatPrice(priceStr) {
   if (!priceStr) return 'N/A';
   let clean = priceStr.toString().trim();
   if (clean.toLowerCase() === 'n/a' || clean === '') return 'N/A';
-  // Verwijder eventuele bestaande euro tekens en spaties voor de check
   const check = clean.replace(/€/g, '').trim();
-  // Voeg € toe als het er nog niet in zit
   if (!clean.includes('€')) {
     clean = `€${clean}`;
   }
@@ -607,6 +618,12 @@ const commands = [
       { name: 'product', description: 'What did you buy?', type: 3, required: true },
       { name: 'extra', description: 'Extra information', type: 3, required: true }
   ] },
+  { name: 'payment', description: 'Send the payment details for this ticket', options: [
+      { name: 'link_or_address', description: 'The payment link or crypto address', type: 3, required: false },
+      { name: 'account_name', description: 'The bank account name (only for Bank Transfer)', type: 3, required: false }
+  ] },
+  { name: 'changepaymentmethod', description: 'Change the payment method for this ticket' },
+  { name: 'delivered', description: 'Mark ticket as delivered and move to archive' },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'close', description: 'Close this ticket' },
@@ -631,6 +648,13 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 client.on('interactionCreate', async (i) => {
   if (i.isChatInputCommand()) {
     const name = i.commandName;
+
+    // Payment Commands restricted to specific roles
+    if (name === 'payment' || name === 'delivered' || name === 'changepaymentmethod') {
+      if (!isPaymentStaff(i.member)) {
+        return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+      }
+    }
 
     if (name === 'setupstore') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
@@ -717,6 +741,104 @@ client.on('interactionCreate', async (i) => {
 
     const tickets = await getTickets();
     const ticket = tickets[i.channelId];
+
+    // === /PAYMENT ===
+    if (name === 'payment') {
+      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+      
+      const method = ticket.payment || 'ideal'; // fallback
+      const methodName = PAYMENT_METHODS[method] || 'Unknown';
+      let linkOrAddress = i.options.getString('link_or_address');
+      let accountName = i.options.getString('account_name');
+
+      if (method === 'bank') {
+        if (!linkOrAddress || !accountName) {
+          return i.reply({ content: '❌ For Bank Transfer you need to provide both the IBAN (`link_or_address`) and the Account Name (`account_name`).', flags: MessageFlags.Ephemeral });
+        }
+      } else {
+        if (!linkOrAddress) {
+          return i.reply({ content: '❌ You need to provide a link or crypto address.', flags: MessageFlags.Ephemeral });
+        }
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle('💳 Payment Information')
+        .setColor(0x2ecc71)
+        .setDescription(`Please complete your payment using the details below.\n\n**Method:** ${methodName}`)
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      if (method === 'bank') {
+        embed.addFields(
+          { name: 'IBAN', value: `\`${linkOrAddress}\``, inline: false },
+          { name: 'Account Name', value: `\`${accountName}\``, inline: false }
+        );
+      } else if (method === 'crypto') {
+        embed.addFields({ name: 'Crypto Address (LTC)', value: `\`${linkOrAddress}\``, inline: false });
+      } else {
+        embed.addFields({ name: 'Payment Link', value: linkOrAddress, inline: false });
+      }
+
+      return i.reply({ embeds: [embed] });
+    }
+
+    // === /CHANGEPAYMENTMETHOD ===
+    if (name === 'changepaymentmethod') {
+      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+      
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('change_payment_method')
+        .setPlaceholder('Select a new payment method')
+        .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key })));
+
+      return i.reply({ content: 'Select the new payment method for this ticket:', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+    }
+
+    // === /DELIVERED ===
+    if (name === 'delivered') {
+      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+      
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      
+      try {
+        // Verander categorie
+        await i.channel.setParent(ARCHIVE_CATEGORY_ID, { lockPermissions: false });
+        
+        // Update data
+        const t = await getTickets();
+        if (t[i.channelId]) {
+          t[i.channelId].categorie = 'archived';
+          await saveTickets(t);
+        }
+
+        // DM klant
+        const targetUser = await client.users.fetch(ticket.userId).catch(() => null);
+        if (targetUser) {
+          const dmEmbed = new EmbedBuilder()
+            .setTitle('Thank you for your purchase!')
+            .setColor(0x00ff88)
+            .setDescription(`Thank you for your purchase at **Prestige Market**! We hope you are satisfied with your order.\n\nPlease consider leaving a vouch in <#${VOUCH_CHANNEL_ID}> to support us.`)
+            .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+            .setTimestamp();
+
+          const vouchButton = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setLabel('Leave a Vouch')
+              .setStyle(ButtonStyle.Link)
+              .setURL(`https://discord.com/channels/${GUILD_ID}/${VOUCH_CHANNEL_ID}`)
+          );
+
+          await targetUser.send({ embeds: [dmEmbed], components: [vouchButton] }).catch(() => console.log('Could not DM user'));
+        }
+
+        await i.channel.send({ content: `✅ Order delivered! Ticket moved to archive. Thank you for your purchase, <@${ticket.userId}>!` });
+        await sendLog('📦 Order Delivered', `Order for <@${ticket.userId}> in <#${i.channelId}> marked as delivered by <@${i.user.id}>.`, 0x00ff88);
+        return i.editReply({ content: '✅ Ticket archived and user notified.' });
+
+      } catch (e) {
+        return i.editReply({ content: `❌ Error: ${e.message}` });
+      }
+    }
 
     if (name === 'close') {
       if (!isStaff(i.member) && (!ticket || ticket.userId !== i.user.id)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
@@ -816,7 +938,7 @@ client.on('interactionCreate', async (i) => {
       const price = i.fields.getTextInputValue('product_price');
       const store = await getStoreData();
       if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
-      store.products[product].price = price; // Wordt automatisch geformatteerd bij weergave
+      store.products[product].price = price;
       store.products[product].amount = '';
       await saveStoreData(store);
       await updateStorePanel();
@@ -830,7 +952,7 @@ client.on('interactionCreate', async (i) => {
       const amount = i.fields.getTextInputValue('product_amount');
       const store = await getStoreData();
       if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
-      store.products[product].price = price; // Wordt automatisch geformatteerd bij weergave
+      store.products[product].price = price;
       store.products[product].amount = amount;
       await saveStoreData(store);
       await updateStorePanel();
@@ -852,7 +974,6 @@ client.on('interactionCreate', async (i) => {
         return i.reply({ content: '❌ Price not set for this product.', flags: MessageFlags.Ephemeral });
       }
 
-      // Verwijder euro teken voor de berekening
       const cleanPrice = prodData.price.toString().replace('€', '').replace(',', '.').trim();
       const pricePer = parseFloat(cleanPrice);
       const amountPer = prodData.amount ? parseInt(prodData.amount) : 1;
@@ -934,6 +1055,18 @@ client.on('interactionCreate', async (i) => {
         await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
       } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
       return;
+    }
+
+    if (i.customId === 'change_payment_method') {
+      if (!isPaymentStaff(i.member)) return i.reply({ content: '❌ You do not have permission.', flags: MessageFlags.Ephemeral });
+      const newMethod = i.values[0];
+      const tickets = await getTickets();
+      if (!tickets[i.channelId]) return i.update({ content: '❌ Ticket not found.', components: [] });
+      
+      tickets[i.channelId].payment = newMethod;
+      await saveTickets(tickets);
+
+      return i.update({ content: `✅ Payment method changed to **${PAYMENT_METHODS[newMethod]}**.`, components: [] });
     }
 
     // ===== SINGLE PRICE CHOICE (from Add Price flow) =====
@@ -1196,7 +1329,7 @@ client.on('interactionCreate', async (i) => {
           product: data.product,
           quantity: data.quantity,
           total: data.total,
-          payment: paymentName
+          payment: data.payment
         });
 
         const embed = new EmbedBuilder()
@@ -1209,7 +1342,7 @@ client.on('interactionCreate', async (i) => {
             { name: 'Service', value: data.service, inline: true },
             { name: 'Product', value: data.product, inline: true },
             { name: 'Quantity', value: `${data.quantity}`, inline: true },
-            { name: 'Total Price', value: data.total, inline: true }, // <-- Hier wordt de geformatteerde totaalprijs gebruikt
+            { name: 'Total Price', value: data.total, inline: true },
             { name: 'Payment Method', value: paymentName, inline: true }
           )
           .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
