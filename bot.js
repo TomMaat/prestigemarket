@@ -41,13 +41,12 @@ const STORE_PANEL_CHANNEL_ID = '1564761625104490607';
 const RECENT_PAYMENTS_CHANNEL_ID = '1564761373026681205';
 const EARNINGS_PANEL_CHANNEL_ID = '1564761453402263572';
 
-// Earnings Users (DEGENE DIE /payment en /delivered MOGEN DOEN)
+// Earnings Users (DEGENE DIE /payment, /delivered en /giveproduct MOGEN DOEN)
 const EARNER_1_ID = '710623438657683486';
 const EARNER_2_ID = '755111368839135367';
 const EARNER_3_ID = '1033753872927293520';
 const EARNER_4_ID = '951548670493462578';
 
-// De users die /payment en /delivered mogen uitvoeren
 const PAYMENT_COMMAND_ALLOWED_IDS = [EARNER_1_ID, EARNER_2_ID, EARNER_3_ID, EARNER_4_ID];
 
 // Roles
@@ -61,7 +60,6 @@ const STAFF_ROLE_IDS = [
   MAIN_TAG_ROLE_ID
 ];
 
-// Rol voor /clearallproducts
 const CLEAR_PRODUCTS_ROLE_ID = '1564415129955729418';
 
 // Categories
@@ -537,7 +535,8 @@ function buildStoreEmbed(store) {
             const amount = p?.amount ? ` per ${p.amount}` : '';
             const buyCost = p?.buyCost ? ` (Buy: €${p.buyCost})` : '';
 
-            sectionText += `      ↳ 💰 ${price}${amount}${buyCost}\n`;
+            // HIER IS DE ENTER TOEGEVOEGD (extra \n)
+            sectionText += `      ↳ 💰 ${price}${amount}${buyCost}\n\n`;
           });
         }
       });
@@ -696,6 +695,9 @@ const commands = [
   ] },
   { name: 'changepaymentmethod', description: 'Change the payment method for this ticket' },
   { name: 'delivered', description: 'Mark ticket as delivered, log payment, and add earnings' },
+  { name: 'giveproduct', description: 'Give the product to the customer (single price only)', options: [
+      { name: 'logins', description: 'The account login(s), separated by spaces', type: 3, required: true }
+  ] },
   { name: 'resetearned', description: 'Reset all earnings to 0' },
   { name: 'clearallproducts', description: 'Clear all products and store data' },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
@@ -723,8 +725,7 @@ client.on('interactionCreate', async (i) => {
   if (i.isChatInputCommand()) {
     const name = i.commandName;
 
-    // Check of de user in de toegestane lijst staat voor /payment en /delivered
-    if (name === 'payment' || name === 'delivered') {
+    if (name === 'payment' || name === 'delivered' || name === 'giveproduct') {
       if (!PAYMENT_COMMAND_ALLOWED_IDS.includes(i.user.id)) {
         return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
       }
@@ -736,7 +737,6 @@ client.on('interactionCreate', async (i) => {
       }
     }
 
-    // Clear all products restricted to specific role
     if (name === 'clearallproducts') {
       if (!i.member.roles.cache.has(CLEAR_PRODUCTS_ROLE_ID)) {
         return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
@@ -760,6 +760,7 @@ client.on('interactionCreate', async (i) => {
       const earnings = { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 };
       await saveEarnings(earnings);
       await updateEarningsPanel();
+      await sendLog('🔄 Earnings Reset', `All earnings have been reset to **€0.00** by <@${i.user.id}>.`, 0xffaa00);
       return i.editReply({ content: '✅ Earnings reset to 0 for all users.' });
     }
 
@@ -883,6 +884,48 @@ client.on('interactionCreate', async (i) => {
       return i.reply({ embeds: [embed] });
     }
 
+    // === /GIVEPRODUCT ===
+    if (name === 'giveproduct') {
+      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+
+      const store = await getStoreData();
+      const prodData = store.products[ticket.product];
+
+      if (!prodData) return i.reply({ content: '❌ Product not found in store data.', flags: MessageFlags.Ephemeral });
+      if (prodData.amount) return i.reply({ content: '❌ This command only works for products with a Single Price.', flags: MessageFlags.Ephemeral });
+
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const logins = i.options.getString('logins').trim().split(/\s+/);
+      const loginList = logins.map((l, index) => `${index + 1}. \`${l}\``).join('\n');
+
+      const dmEmbed = new EmbedBuilder()
+        .setTitle('✅ Your Product Delivery')
+        .setColor(0x00ff88)
+        .setDescription(`Thank you for your purchase at **Prestige Market**!\n\nHere are your account details for **${ticket.product}**:\n\n${loginList}`)
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      const ticketEmbed = new EmbedBuilder()
+        .setTitle('📦 Product Delivered')
+        .setColor(0x00ff88)
+        .setDescription(`The product has been successfully delivered to <@${ticket.userId}>.\n\n**Product:** ${ticket.product}\n**Logins:**\n${loginList}`)
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      try {
+        const targetUser = await client.users.fetch(ticket.userId);
+        await targetUser.send({ embeds: [dmEmbed] }).catch(() => console.log('Could not DM user'));
+        
+        await i.channel.send({ embeds: [ticketEmbed] });
+        await sendLog('📦 Product Given', `<@${i.user.id}> gave **${ticket.product}** to <@${ticket.userId}> in <#${i.channelId}>.`, 0x00ff88);
+
+        return i.editReply({ content: '✅ Product successfully delivered and sent to the customer!' });
+      } catch (e) {
+        return i.editReply({ content: `❌ Error: ${e.message}` });
+      }
+    }
+
     // === /CHANGEPAYMENTMETHOD ===
     if (name === 'changepaymentmethod') {
       if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
@@ -913,7 +956,6 @@ client.on('interactionCreate', async (i) => {
           profit = totalPrice - (buyCostPer * quantity);
         }
 
-        // Add to earnings
         if (profit !== 0) {
           const earnings = await getEarnings();
           if (PAYMENT_COMMAND_ALLOWED_IDS.includes(i.user.id)) {
@@ -923,7 +965,6 @@ client.on('interactionCreate', async (i) => {
           }
         }
 
-        // Log to Recent Payments
         const recentChannel = await client.channels.fetch(RECENT_PAYMENTS_CHANNEL_ID).catch(() => null);
         if (recentChannel) {
           const paymentEmbed = new EmbedBuilder()
