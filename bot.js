@@ -585,15 +585,21 @@ function buildStoreEmbed(store) {
   return embed;
 }
 
-function buildStoreRow() {
-  return new ActionRowBuilder().addComponents(
+// HIER IS DE FIX: 2 aparte ActionRows om onder de limiet van 5 knoppen te blijven
+function buildStoreRows() {
+  const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('store_add_section').setLabel('Add Section').setEmoji('➕').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('store_add_service').setLabel('Add Service').setEmoji('➕').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('store_add_product').setLabel('Add Product').setEmoji('➕').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId('store_add_price').setLabel('Add Price').setEmoji('💰').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId('store_remove').setLabel('Remove').setEmoji('🗑️').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId('store_edit').setLabel('Edit').setEmoji('✏️').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('store_add_price').setLabel('Add Price').setEmoji('💰').setStyle(ButtonStyle.Danger)
   );
+
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('store_edit').setLabel('Edit').setEmoji('✏️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('store_remove').setLabel('Remove').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
+  );
+
+  return [row1, row2];
 }
 
 async function setupStorePanel() {
@@ -606,9 +612,9 @@ async function setupStorePanel() {
 
     const store = await getStoreData();
     const embed = buildStoreEmbed(store);
-    const row = buildStoreRow();
+    const rows = buildStoreRows();
 
-    const newMsg = await channel.send({ embeds: [embed], components: [row] });
+    const newMsg = await channel.send({ embeds: [embed], components: rows });
     await setStorePanelMessageId(newMsg.id);
     console.log('✅ Store panel placed');
   } catch (e) { console.error('Store panel error:', e.message); }
@@ -627,7 +633,7 @@ async function updateStorePanel() {
 
     const store = await getStoreData();
     const embed = buildStoreEmbed(store);
-    await msg.edit({ embeds: [embed], components: [buildStoreRow()] });
+    await msg.edit({ embeds: [embed], components: buildStoreRows() });
   } catch (e) { console.error('Failed to update store panel:', e.message); }
 }
 
