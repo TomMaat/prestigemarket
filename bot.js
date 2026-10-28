@@ -619,8 +619,10 @@ const commands = [
       { name: 'extra', description: 'Extra information', type: 3, required: true }
   ] },
   { name: 'payment', description: 'Send the payment details for this ticket', options: [
-      { name: 'link_or_address', description: 'The payment link or crypto address', type: 3, required: false },
-      { name: 'account_name', description: 'The bank account name (only for Bank Transfer)', type: 3, required: false }
+      { name: 'link', description: 'Payment link (iDeal/Tikkie/PayPal)', type: 3, required: false },
+      { name: 'crypto_address', description: 'Crypto wallet address (LTC)', type: 3, required: false },
+      { name: 'bank_account_number', description: 'Bank account number (IBAN)', type: 3, required: false },
+      { name: 'account_name', description: 'Bank account holder name', type: 3, required: false }
   ] },
   { name: 'changepaymentmethod', description: 'Change the payment method for this ticket' },
   { name: 'delivered', description: 'Mark ticket as delivered and move to archive' },
@@ -746,20 +748,13 @@ client.on('interactionCreate', async (i) => {
     if (name === 'payment') {
       if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
       
-      const method = ticket.payment || 'ideal'; // fallback
+      const method = ticket.payment || 'ideal';
       const methodName = PAYMENT_METHODS[method] || 'Unknown';
-      let linkOrAddress = i.options.getString('link_or_address');
-      let accountName = i.options.getString('account_name');
 
-      if (method === 'bank') {
-        if (!linkOrAddress || !accountName) {
-          return i.reply({ content: '❌ For Bank Transfer you need to provide both the IBAN (`link_or_address`) and the Account Name (`account_name`).', flags: MessageFlags.Ephemeral });
-        }
-      } else {
-        if (!linkOrAddress) {
-          return i.reply({ content: '❌ You need to provide a link or crypto address.', flags: MessageFlags.Ephemeral });
-        }
-      }
+      const link = i.options.getString('link');
+      const cryptoAddress = i.options.getString('crypto_address');
+      const bankAccountNumber = i.options.getString('bank_account_number');
+      const accountName = i.options.getString('account_name');
 
       const embed = new EmbedBuilder()
         .setTitle('💳 Payment Information')
@@ -769,14 +764,23 @@ client.on('interactionCreate', async (i) => {
         .setTimestamp();
 
       if (method === 'bank') {
+        if (!bankAccountNumber || !accountName) {
+          return i.reply({ content: '❌ For Bank Transfer you must provide both `bank_account_number` and `account_name`.', flags: MessageFlags.Ephemeral });
+        }
         embed.addFields(
-          { name: 'IBAN', value: `\`${linkOrAddress}\``, inline: false },
+          { name: 'Bank Account (IBAN)', value: `\`${bankAccountNumber}\``, inline: false },
           { name: 'Account Name', value: `\`${accountName}\``, inline: false }
         );
       } else if (method === 'crypto') {
-        embed.addFields({ name: 'Crypto Address (LTC)', value: `\`${linkOrAddress}\``, inline: false });
+        if (!cryptoAddress) {
+          return i.reply({ content: '❌ For Crypto you must provide a `crypto_address`.', flags: MessageFlags.Ephemeral });
+        }
+        embed.addFields({ name: 'Crypto Address (LTC)', value: `\`${cryptoAddress}\``, inline: false });
       } else {
-        embed.addFields({ name: 'Payment Link', value: linkOrAddress, inline: false });
+        if (!link) {
+          return i.reply({ content: '❌ For this method you must provide a `link`.', flags: MessageFlags.Ephemeral });
+        }
+        embed.addFields({ name: 'Payment Link', value: link, inline: false });
       }
 
       return i.reply({ embeds: [embed] });
@@ -801,17 +805,14 @@ client.on('interactionCreate', async (i) => {
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       
       try {
-        // Verander categorie
         await i.channel.setParent(ARCHIVE_CATEGORY_ID, { lockPermissions: false });
         
-        // Update data
         const t = await getTickets();
         if (t[i.channelId]) {
           t[i.channelId].categorie = 'archived';
           await saveTickets(t);
         }
 
-        // DM klant
         const targetUser = await client.users.fetch(ticket.userId).catch(() => null);
         if (targetUser) {
           const dmEmbed = new EmbedBuilder()
@@ -932,7 +933,6 @@ client.on('interactionCreate', async (i) => {
       return i.reply({ content: `✅ Product **${name}** added to **${service}**.`, flags: MessageFlags.Ephemeral });
     }
 
-    // Single price (no amount)
     if (i.customId.startsWith('modal_add_price_single_')) {
       const product = i.customId.replace('modal_add_price_single_', '');
       const price = i.fields.getTextInputValue('product_price');
@@ -945,7 +945,6 @@ client.on('interactionCreate', async (i) => {
       return i.reply({ content: `✅ Single price for **${product}** set to **${formatPrice(price)}**.`, flags: MessageFlags.Ephemeral });
     }
 
-    // Price per amount
     if (i.customId.startsWith('modal_add_price_amount_')) {
       const product = i.customId.replace('modal_add_price_amount_', '');
       const price = i.fields.getTextInputValue('product_price');
@@ -1069,7 +1068,6 @@ client.on('interactionCreate', async (i) => {
       return i.update({ content: `✅ Payment method changed to **${PAYMENT_METHODS[newMethod]}**.`, components: [] });
     }
 
-    // ===== SINGLE PRICE CHOICE (from Add Price flow) =====
     if (i.customId.startsWith('select_price_type_')) {
       const product = i.customId.replace('select_price_type_', '');
       const choice = i.values[0];
@@ -1088,7 +1086,6 @@ client.on('interactionCreate', async (i) => {
       return i.showModal(modal);
     }
 
-    // ===== REMOVE FLOW =====
     if (i.customId === 'store_remove_type') {
       const type = i.values[0];
       const store = await getStoreData();
@@ -1203,7 +1200,6 @@ client.on('interactionCreate', async (i) => {
       return i.update({ content: `✅ Price for **${product}** removed.`, components: [] });
     }
 
-    // ===== EXISTING STORE FLOWS =====
     if (i.customId === 'select_section_for_service') {
       const section = i.values[0];
       const modal = new ModalBuilder().setCustomId(`modal_add_service_${section}`).setTitle('Add Service');
