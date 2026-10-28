@@ -41,9 +41,14 @@ const STORE_PANEL_CHANNEL_ID = '1564761625104490607';
 const RECENT_PAYMENTS_CHANNEL_ID = '1564761373026681205';
 const EARNINGS_PANEL_CHANNEL_ID = '1564761453402263572';
 
-// Earnings Users
-const EARNER_1_ID = '1033753872927293520';
-const EARNER_2_ID = '951548670493462578';
+// Earnings Users (DEGENE DIE /payment en /delivered MOGEN DOEN)
+const EARNER_1_ID = '710623438657683486';
+const EARNER_2_ID = '755111368839135367';
+const EARNER_3_ID = '1033753872927293520';
+const EARNER_4_ID = '951548670493462578';
+
+// De users die /payment en /delivered mogen uitvoeren
+const PAYMENT_COMMAND_ALLOWED_IDS = [EARNER_1_ID, EARNER_2_ID, EARNER_3_ID, EARNER_4_ID];
 
 // Roles
 const VERIFIED_ROLE_ID = '1564415134171013154';
@@ -56,11 +61,8 @@ const STAFF_ROLE_IDS = [
   MAIN_TAG_ROLE_ID
 ];
 
-// Specifieke rollen voor payment/delivered commando's
-const PAYMENT_ROLE_IDS = [
-  '1564415129955729418',
-  '1564415131054772295'
-];
+// Rol voor /clearallproducts
+const CLEAR_PRODUCTS_ROLE_ID = '1564415129955729418';
 
 // Categories
 const NOT_LEGIT_TICKET_CATEGORY_ID = '1564632244235014315';
@@ -152,7 +154,7 @@ async function readGist() {
       vouchCounter: 0,
       storeData: { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null },
       storePanelMessageId: null,
-      earnings: { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0 },
+      earnings: { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 },
       earningsMessageId: null,
     };
   }
@@ -168,7 +170,7 @@ async function readGist() {
     vouchCounter: parsed.vouchCounter || 0,
     storeData: parsed.storeData || { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null },
     storePanelMessageId: parsed.storePanelMessageId || null,
-    earnings: parsed.earnings || { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0 },
+    earnings: parsed.earnings || { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 },
     earningsMessageId: parsed.earningsMessageId || null,
   };
 }
@@ -244,10 +246,6 @@ async function setEarningsMessageId(id) { const d = await readGist(); d.earnings
 // ===== HELPERS =====
 function isStaff(member) {
   return member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
-}
-
-function isPaymentStaff(member) {
-  return member && PAYMENT_ROLE_IDS.some(id => member.roles.cache.has(id));
 }
 
 function formatPrice(priceStr) {
@@ -456,11 +454,19 @@ async function setupVerify() {
 function buildEarningsEmbed(earnings) {
   const earned1 = earnings[EARNER_1_ID] || 0;
   const earned2 = earnings[EARNER_2_ID] || 0;
+  const earned3 = earnings[EARNER_3_ID] || 0;
+  const earned4 = earnings[EARNER_4_ID] || 0;
 
   return new EmbedBuilder()
     .setTitle('💰 Total Earned (Profit)')
     .setColor(0x00ff88)
-    .setDescription(`**Profit overview for our sellers:**\n\n<@${EARNER_1_ID}>: **€${earned1.toFixed(2)}**\n<@${EARNER_2_ID}>: **€${earned2.toFixed(2)}**`)
+    .setDescription(
+      `**Profit overview for our sellers:**\n\n` +
+      `<@${EARNER_1_ID}>: **€${earned1.toFixed(2)}**\n` +
+      `<@${EARNER_2_ID}>: **€${earned2.toFixed(2)}**\n` +
+      `<@${EARNER_3_ID}>: **€${earned3.toFixed(2)}**\n` +
+      `<@${EARNER_4_ID}>: **€${earned4.toFixed(2)}**`
+    )
     .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
     .setThumbnail(LOGO)
     .setTimestamp();
@@ -691,6 +697,7 @@ const commands = [
   { name: 'changepaymentmethod', description: 'Change the payment method for this ticket' },
   { name: 'delivered', description: 'Mark ticket as delivered, log payment, and add earnings' },
   { name: 'resetearned', description: 'Reset all earnings to 0' },
+  { name: 'clearallproducts', description: 'Clear all products and store data' },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'close', description: 'Close this ticket' },
@@ -716,11 +723,29 @@ client.on('interactionCreate', async (i) => {
   if (i.isChatInputCommand()) {
     const name = i.commandName;
 
-    // Payment Commands restricted to specific roles
-    if (name === 'payment' || name === 'delivered' || name === 'changepaymentmethod' || name === 'resetearned') {
-      if (!isPaymentStaff(i.member)) {
+    // Check of de user in de toegestane lijst staat voor /payment en /delivered
+    if (name === 'payment' || name === 'delivered') {
+      if (!PAYMENT_COMMAND_ALLOWED_IDS.includes(i.user.id)) {
         return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
       }
+    }
+
+    if (name === 'changepaymentmethod' || name === 'resetearned') {
+      if (!isStaff(i.member)) {
+        return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+      }
+    }
+
+    // Clear all products restricted to specific role
+    if (name === 'clearallproducts') {
+      if (!i.member.roles.cache.has(CLEAR_PRODUCTS_ROLE_ID)) {
+        return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+      }
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      const emptyStore = { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null };
+      await saveStoreData(emptyStore);
+      await updateStorePanel();
+      return i.editReply({ content: '✅ All products, services, and sections have been cleared!' });
     }
 
     if (name === 'setupstore') {
@@ -732,10 +757,10 @@ client.on('interactionCreate', async (i) => {
 
     if (name === 'resetearned') {
       await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const earnings = { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0 };
+      const earnings = { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 };
       await saveEarnings(earnings);
       await updateEarningsPanel();
-      return i.editReply({ content: '✅ Earnings reset to 0 for both users.' });
+      return i.editReply({ content: '✅ Earnings reset to 0 for all users.' });
     }
 
     if (name === 'vouch') {
@@ -891,7 +916,7 @@ client.on('interactionCreate', async (i) => {
         // Add to earnings
         if (profit !== 0) {
           const earnings = await getEarnings();
-          if (i.user.id === EARNER_1_ID || i.user.id === EARNER_2_ID) {
+          if (PAYMENT_COMMAND_ALLOWED_IDS.includes(i.user.id)) {
             earnings[i.user.id] = (earnings[i.user.id] || 0) + profit;
             await saveEarnings(earnings);
             await updateEarningsPanel();
@@ -1166,7 +1191,7 @@ client.on('interactionCreate', async (i) => {
     }
 
     if (i.customId === 'change_payment_method') {
-      if (!isPaymentStaff(i.member)) return i.reply({ content: '❌ You do not have permission.', flags: MessageFlags.Ephemeral });
+      if (!isStaff(i.member)) return i.reply({ content: '❌ You do not have permission.', flags: MessageFlags.Ephemeral });
       const newMethod = i.values[0];
       const tickets = await getTickets();
       if (!tickets[i.channelId]) return i.update({ content: '❌ Ticket not found.', components: [] });
