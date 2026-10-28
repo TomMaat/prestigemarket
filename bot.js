@@ -591,7 +591,8 @@ function buildStoreRow() {
     new ButtonBuilder().setCustomId('store_add_service').setLabel('Add Service').setEmoji('➕').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('store_add_product').setLabel('Add Product').setEmoji('➕').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('store_add_price').setLabel('Add Price').setEmoji('💰').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId('store_remove').setLabel('Remove').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId('store_remove').setLabel('Remove').setEmoji('🗑️').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('store_edit').setLabel('Edit').setEmoji('✏️').setStyle(ButtonStyle.Secondary)
   );
 }
 
@@ -641,7 +642,15 @@ async function updateServiceShop(serviceName) {
     if (!channel) return;
 
     const products = store.services[serviceName] || [];
-    const productLines = products.length > 0 ? products.map(p => `> ${p}`).join('\n') : '*No products available yet.*';
+    const productLines = products.length > 0 ? products.map(p => {
+      const pd = store.products[p];
+      let priceLabel = '';
+      if (pd && pd.price && pd.price !== 'N/A') {
+        const amount = pd.amount ? ` per ${pd.amount}` : '';
+        priceLabel = ` - **${formatPrice(pd.price)}**${amount}`;
+      }
+      return `> ${p}${priceLabel}`;
+    }).join('\n') : '*No products available yet.*';
 
     const embed = new EmbedBuilder()
       .setTitle(`Prestige ${serviceName} Shop`)
@@ -1267,6 +1276,64 @@ client.on('interactionCreate', async (i) => {
 
       return i.update({ content: `You want **${quantity}** of **${product}**. Total: **${formattedTotal}**.\n\nSelect your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
+
+    // === EDIT MODALS ===
+    if (i.customId.startsWith('edit_service_modal_')) {
+      const oldName = i.customId.replace('edit_service_modal_', '');
+      const newName = i.fields.getTextInputValue('new_name');
+      const store = await getStoreData();
+      
+      if (!store.services[oldName]) return i.reply({ content: '❌ Service not found.', flags: MessageFlags.Ephemeral });
+      
+      for (const [sec, list] of Object.entries(store.sections)) {
+        const idx = list.indexOf(oldName);
+        if (idx !== -1) list[idx] = newName;
+      }
+      
+      if (store.services[oldName]) {
+        store.services[newName] = store.services[oldName];
+        delete store.services[oldName];
+      }
+      
+      if (store.serviceChannels?.[oldName]) {
+        if (!store.serviceChannels) store.serviceChannels = {};
+        store.serviceChannels[newName] = store.serviceChannels[oldName];
+        delete store.serviceChannels[oldName];
+      }
+      
+      if (store.serviceMessages?.[oldName]) {
+        if (!store.serviceMessages) store.serviceMessages = {};
+        store.serviceMessages[newName] = store.serviceMessages[oldName];
+        delete store.serviceMessages[oldName];
+      }
+      
+      await saveStoreData(store);
+      await updateStorePanel();
+      
+      if (store.serviceChannels?.[newName]) {
+        await updateServiceShop(newName);
+      }
+      
+      return i.reply({ content: `✅ Service **${oldName}** has been renamed to **${newName}**.`, flags: MessageFlags.Ephemeral });
+    }
+
+    if (i.customId.startsWith('edit_price_modal_')) {
+      const product = i.customId.replace('edit_price_modal_', '');
+      const price = i.fields.getTextInputValue('product_price');
+      const amount = i.fields.getTextInputValue('product_amount');
+      const buyCost = i.fields.getTextInputValue('product_buy_cost');
+      const store = await getStoreData();
+      
+      if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
+      
+      store.products[product].price = price;
+      store.products[product].amount = amount;
+      if (buyCost) store.products[product].buyCost = buyCost;
+      await saveStoreData(store);
+      await updateStorePanel();
+      
+      return i.reply({ content: `✅ Price for **${product}** has been updated.`, flags: MessageFlags.Ephemeral });
+    }
   }
 
   if (i.isStringSelectMenu()) {
@@ -1670,6 +1737,105 @@ client.on('interactionCreate', async (i) => {
       } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
       return;
     }
+
+    // === EDIT SELECTS ===
+    if (i.customId === 'store_edit_type') {
+      const type = i.values[0];
+      const store = await getStoreData();
+
+      if (type === 'section') {
+        const sections = Object.keys(store.sections);
+        if (sections.length === 0) return i.update({ content: '❌ No sections to edit.', components: [] });
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId('edit_section_select')
+          .setPlaceholder('Select a section to edit')
+          .addOptions(sections.map(s => ({ label: s, value: s })));
+        return i.update({ content: '✏️ Which **section** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
+
+      if (type === 'service') {
+        const services = Object.keys(store.services);
+        if (services.length === 0) return i.update({ content: '❌ No services to edit.', components: [] });
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId('edit_service_select')
+          .setPlaceholder('Select a service to edit')
+          .addOptions(services.map(s => ({ label: s, value: s })));
+        return i.update({ content: '✏️ Which **service** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
+
+      if (type === 'product') {
+        const products = Object.keys(store.products);
+        if (products.length === 0) return i.update({ content: '❌ No products to edit.', components: [] });
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId('edit_product_select')
+          .setPlaceholder('Select a product to edit')
+          .addOptions(products.map(p => ({ label: p, value: p })));
+        return i.update({ content: '✏️ Which **product** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
+
+      if (type === 'price') {
+        const products = Object.keys(store.products);
+        if (products.length === 0) return i.update({ content: '❌ No products to edit.', components: [] });
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId('edit_price_select')
+          .setPlaceholder('Select a product price to edit')
+          .addOptions(products.map(p => ({ label: p, value: p })));
+        return i.update({ content: '✏️ Which **price** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
+      return;
+    }
+
+    if (i.customId === 'edit_section_select') {
+      const section = i.values[0];
+      const modal = new ModalBuilder().setCustomId(`edit_section_modal_${section}`).setTitle('Edit Section');
+      const input = new TextInputBuilder().setCustomId('new_name').setLabel('New Section Name').setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return i.showModal(modal);
+    }
+
+    if (i.customId === 'edit_service_select') {
+      const service = i.values[0];
+      const store = await getStoreData();
+      
+      const modal = new ModalBuilder().setCustomId(`edit_service_modal_${service}`).setTitle('Edit Service');
+      const input1 = new TextInputBuilder().setCustomId('new_name').setLabel('New Service Name').setStyle(TextInputStyle.Short).setValue(service).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input1));
+      
+      await i.showModal(modal);
+      
+      // Na de modal sturen we een kanaal dropdown voor het koppelen
+      const channels = i.guild.channels.cache.filter(c => c.type === ChannelType.GuildText && c.id !== STORE_PANEL_CHANNEL_ID);
+      if (channels.size > 0) {
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId(`link_channel_to_service_${service}`)
+          .setPlaceholder('Select a channel to link to this service')
+          .addOptions(channels.first(25).map(c => ({ label: c.name, value: c.id })));
+
+        await i.followUp({ content: `Would you like to link a text channel to **${service}** for the shop embed?`, components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+      }
+      return;
+    }
+
+    if (i.customId === 'edit_product_select') {
+      const product = i.values[0];
+      const modal = new ModalBuilder().setCustomId(`edit_product_modal_${product}`).setTitle('Edit Product');
+      const input = new TextInputBuilder().setCustomId('new_name').setLabel('New Product Name').setStyle(TextInputStyle.Short).setValue(product).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return i.showModal(modal);
+    }
+
+    if (i.customId === 'edit_price_select') {
+      const product = i.values[0];
+      const store = await getStoreData();
+      const pd = store.products[product] || {};
+      
+      const modal = new ModalBuilder().setCustomId(`edit_price_modal_${product}`).setTitle('Edit Price');
+      const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setValue(pd.price || '').setRequired(true);
+      const input2 = new TextInputBuilder().setCustomId('product_amount').setLabel('Amount (leave empty for single price)').setStyle(TextInputStyle.Short).setValue(pd.amount || '').setRequired(false);
+      const input3 = new TextInputBuilder().setCustomId('product_buy_cost').setLabel('Buy Cost (e.g. 2 or 0,50)').setStyle(TextInputStyle.Short).setValue(pd.buyCost || '').setRequired(false);
+      modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2), new ActionRowBuilder().addComponents(input3));
+      return i.showModal(modal);
+    }
   }
 
   if (i.isButton()) {
@@ -1735,6 +1901,20 @@ client.on('interactionCreate', async (i) => {
           { label: 'Price', value: 'price', emoji: '💰' },
         ]);
       return i.reply({ content: '🗑️ What do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+    }
+
+    if (i.customId === 'store_edit') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('store_edit_type')
+        .setPlaceholder('What do you want to edit?')
+        .addOptions([
+          { label: 'Section', value: 'section', emoji: '🔹' },
+          { label: 'Service', value: 'service', emoji: '🔧' },
+          { label: 'Product', value: 'product', emoji: '📦' },
+          { label: 'Price', value: 'price', emoji: '💰' },
+        ]);
+      return i.reply({ content: '✏️ What do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
     }
 
     if (i.customId === 'verify_accept_rules') {
