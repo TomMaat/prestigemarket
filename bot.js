@@ -7,6 +7,9 @@ const {
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   ChannelType,
   PermissionFlagsBits,
   AttachmentBuilder,
@@ -34,6 +37,7 @@ const TICKET_PANEL_CHANNEL_ID = '1564415332737884233';
 const LOG_CHANNEL_ID = '1555729409535774833'; 
 const TICKET_TRANSCRIPT_CHANNEL_ID = '1564415332737884234';
 const VOUCH_CHANNEL_ID = '1564555149865656401';
+const STORE_PANEL_CHANNEL_ID = '1564761625104490607';
 
 // Rollen
 const VERIFIED_ROLE_ID = '1564415134171013154';
@@ -135,7 +139,8 @@ async function readGist() {
       notlegitTickets: {},
       confirmedRejects: [],
       vouchCounter: 0,
-      storeData: { sections: {}, services: {}, products: {} },
+      storeData: { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null },
+      storePanelMessageId: null,
     };
   }
 
@@ -148,7 +153,8 @@ async function readGist() {
     notlegitTickets: parsed.notlegitTickets || {},
     confirmedRejects: parsed.confirmedRejects || [],
     vouchCounter: parsed.vouchCounter || 0,
-    storeData: parsed.storeData || { sections: {}, services: {}, products: {} },
+    storeData: parsed.storeData || { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null },
+    storePanelMessageId: parsed.storePanelMessageId || null,
   };
 }
 
@@ -212,6 +218,9 @@ async function writeVouchCounter(n) { const d = await readGist(); d.vouchCounter
 // Store Data
 async function getStoreData() { const d = await readGist(); return d.storeData; }
 async function saveStoreData(s) { const d = await readGist(); d.storeData = s; await writeGist(d); }
+
+async function getStorePanelMessageId() { const d = await readGist(); return d.storePanelMessageId; }
+async function setStorePanelMessageId(id) { const d = await readGist(); d.storePanelMessageId = id; await writeGist(d); }
 
 // ===== HELPERS =====
 function isStaff(member) {
@@ -404,6 +413,86 @@ async function setupVerify() {
   } catch (e) { console.error('Verify setup error:', e.message); }
 }
 
+// ===== STORE MANAGEMENT SYSTEEM =====
+function buildStoreEmbed(store) {
+  const embed = new EmbedBuilder()
+    .setTitle('🛒 Store Management')
+    .setColor(0x5865f2)
+    .setThumbnail(LOGO)
+    .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+    .setTimestamp();
+
+  if (Object.keys(store.sections).length === 0) {
+    embed.setDescription('*No sections configured yet.*\n\nUse the buttons below to add sections, services, and products.');
+  } else {
+    for (const [section, services] of Object.entries(store.sections)) {
+      let sectionText = '';
+      if (services.length === 0) sectionText = '*No services*';
+      for (const service of services) {
+        const products = store.services[service] || [];
+        let productText = '';
+        if (products.length === 0) productText = '  └ *No products*';
+        for (const prod of products) {
+          const price = store.products[prod]?.price || 'N/A';
+          productText += `  └ ${prod} (${price})\n`;
+        }
+        sectionText += `**${service}**\n${productText}`;
+      }
+      embed.addFields({ name: `🔹 ${section}`, value: sectionText || '*Empty*', inline: false });
+    }
+    embed.addFields({ 
+      name: 'ℹ️ Info', 
+      value: `**Last Section:** ${store.lastSection || 'None'}\n**Last Service:** ${store.lastService || 'None'}\n**Last Product:** ${store.lastProduct || 'None'}`, 
+      inline: false 
+    });
+  }
+
+  return embed;
+}
+
+function buildStoreRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('store_add_section').setLabel('Add Section').setEmoji('➕').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('store_add_service').setLabel('Add Service').setEmoji('➕').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('store_add_product').setLabel('Add Product').setEmoji('➕').setStyle(ButtonStyle.Success)
+  );
+}
+
+async function setupStorePanel() {
+  try {
+    const channel = await client.channels.fetch(STORE_PANEL_CHANNEL_ID).catch(() => null);
+    if (!channel) return console.error(`❌ Store panel channel (${STORE_PANEL_CHANNEL_ID}) not found.`);
+
+    const fetched = await channel.messages.fetch({ limit: 50 });
+    for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
+
+    const store = await getStoreData();
+    const embed = buildStoreEmbed(store);
+    const row = buildStoreRow();
+
+    const newMsg = await channel.send({ embeds: [embed], components: [row] });
+    await setStorePanelMessageId(newMsg.id);
+    console.log('✅ Store panel placed');
+  } catch (e) { console.error('Store panel error:', e.message); }
+}
+
+async function updateStorePanel() {
+  try {
+    const channel = await client.channels.fetch(STORE_PANEL_CHANNEL_ID).catch(() => null);
+    if (!channel) return;
+
+    const messageId = await getStorePanelMessageId();
+    if (!messageId) return;
+
+    const msg = await channel.messages.fetch(messageId).catch(() => null);
+    if (!msg) return;
+
+    const store = await getStoreData();
+    const embed = buildStoreEmbed(store);
+    await msg.edit({ embeds: [embed], components: [buildStoreRow()] });
+  } catch (e) { console.error('Failed to update store panel:', e.message); }
+}
+
 // ===== TICKET SYSTEEM =====
 function buildTicketPanelEmbed() {
   return new EmbedBuilder()
@@ -498,15 +587,6 @@ const commands = [
       { name: 'product', description: 'What did you buy?', type: 3, required: true },
       { name: 'extra', description: 'Extra information', type: 3, required: true }
   ] },
-  { name: 'addsection', description: 'Add a new section', options: [{ name: 'name', description: 'Section name', type: 3, required: true }] },
-  { name: 'removesection', description: 'Remove a section', options: [{ name: 'name', description: 'Section name', type: 3, required: true }] },
-  { name: 'addservice', description: 'Add a service to a section', options: [{ name: 'section', description: 'Section name', type: 3, required: true }, { name: 'name', description: 'Service name', type: 3, required: true }] },
-  { name: 'removeservice', description: 'Remove a service from a section', options: [{ name: 'section', description: 'Section name', type: 3, required: true }, { name: 'name', description: 'Service name', type: 3, required: true }] },
-  { name: 'addproduct', description: 'Add a product to a service', options: [{ name: 'service', description: 'Service name', type: 3, required: true }, { name: 'name', description: 'Product name', type: 3, required: true }] },
-  { name: 'removeproduct', description: 'Remove a product from a service', options: [{ name: 'service', description: 'Service name', type: 3, required: true }, { name: 'name', description: 'Product name', type: 3, required: true }] },
-  { name: 'addprice', description: 'Set the price of a product', options: [{ name: 'product', description: 'Product name', type: 3, required: true }, { name: 'price', description: 'Price', type: 3, required: true }] },
-  { name: 'removeprice', description: 'Remove the price of a product', options: [{ name: 'product', description: 'Product name', type: 3, required: true }] },
-  { name: 'manageproducts', description: 'View all products and prices' },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'close', description: 'Close this ticket' },
@@ -514,6 +594,7 @@ const commands = [
   { name: 'move', description: 'Move this ticket to another category' },
   { name: 'ticketpanel', description: 'Place the ticket panel' },
   { name: 'refreshverify', description: 'Refresh the verify message' },
+  { name: 'setupstore', description: 'Place the store management panel' },
   { name: 'removekruis', description: 'Remove ❌ votes from the legit poll', options: [{ name: 'amount', description: 'How many?', type: 4, required: true, min_value: 1 }] }
 ];
 
@@ -531,38 +612,11 @@ client.on('interactionCreate', async (i) => {
   if (i.isChatInputCommand()) {
     const name = i.commandName;
 
-    if (name === 'manageproducts') {
+    if (name === 'setupstore') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const store = await getStoreData();
-      
-      const embed = new EmbedBuilder()
-        .setTitle('📦 Store Overview')
-        .setColor(0x5865f2)
-        .setThumbnail(LOGO)
-        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
-        .setTimestamp();
-
-      if (Object.keys(store.sections).length === 0) {
-        embed.setDescription('*No sections configured yet.*');
-      } else {
-        for (const [section, services] of Object.entries(store.sections)) {
-          let sectionText = '';
-          if (services.length === 0) sectionText = '*No services*';
-          for (const service of services) {
-            const products = store.services[service] || [];
-            let productText = '';
-            if (products.length === 0) productText = '  └ *No products*';
-            for (const prod of products) {
-              const price = store.products[prod]?.price || 'N/A';
-              productText += `  └ ${prod} (${price})\n`;
-            }
-            sectionText += `**${service}**\n${productText}`;
-          }
-          embed.addFields({ name: `🔹 ${section}`, value: sectionText || '*Empty*', inline: false });
-        }
-      }
-
-      return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      await setupStorePanel();
+      return i.editReply({ content: '✅ Store panel placed!' });
     }
 
     if (name === 'vouch') {
@@ -608,71 +662,6 @@ client.on('interactionCreate', async (i) => {
       } catch (e) {
         console.error(e);
         return i.editReply({ content: `❌ Error: ${e.message}` });
-      }
-    }
-
-    if (name.includes('add') || name.includes('remove')) {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      
-      const store = await getStoreData();
-      const secName = i.options.getString('section');
-      const servName = i.options.getString('service') || i.options.getString('name');
-      const prodName = i.options.getString('product');
-      const price = i.options.getString('price');
-
-      if (name === 'addsection') {
-        const n = i.options.getString('name');
-        if (!store.sections[n]) store.sections[n] = [];
-        await saveStoreData(store);
-        return i.reply({ content: `✅ Section **${n}** added.`, flags: MessageFlags.Ephemeral });
-      }
-      if (name === 'removesection') {
-        const n = i.options.getString('name');
-        delete store.sections[n];
-        await saveStoreData(store);
-        return i.reply({ content: `✅ Section **${n}** removed.`, flags: MessageFlags.Ephemeral });
-      }
-      if (name === 'addservice') {
-        if (!store.sections[secName]) return i.reply({ content: `❌ Section **${secName}** does not exist.`, flags: MessageFlags.Ephemeral });
-        if (!store.sections[secName].includes(servName)) store.sections[secName].push(servName);
-        if (!store.services[servName]) store.services[servName] = [];
-        await saveStoreData(store);
-        return i.reply({ content: `✅ Service **${servName}** added to **${secName}**.`, flags: MessageFlags.Ephemeral });
-      }
-      if (name === 'removeservice') {
-        if (store.sections[secName]) {
-          store.sections[secName] = store.sections[secName].filter(s => s !== servName);
-        }
-        delete store.services[servName];
-        await saveStoreData(store);
-        return i.reply({ content: `✅ Service **${servName}** removed.`, flags: MessageFlags.Ephemeral });
-      }
-      if (name === 'addproduct') {
-        if (!store.services[servName]) return i.reply({ content: `❌ Service **${servName}** does not exist.`, flags: MessageFlags.Ephemeral });
-        if (!store.services[servName].includes(prodName)) store.services[servName].push(prodName);
-        if (!store.products[prodName]) store.products[prodName] = { price: 'N/A' };
-        await saveStoreData(store);
-        return i.reply({ content: `✅ Product **${prodName}** added to **${servName}**.`, flags: MessageFlags.Ephemeral });
-      }
-      if (name === 'removeproduct') {
-        if (store.services[servName]) {
-          store.services[servName] = store.services[servName].filter(p => p !== prodName);
-        }
-        delete store.products[prodName];
-        await saveStoreData(store);
-        return i.reply({ content: `✅ Product **${prodName}** removed.`, flags: MessageFlags.Ephemeral });
-      }
-      if (name === 'addprice') {
-        if (!store.products[prodName]) return i.reply({ content: `❌ Product **${prodName}** does not exist.`, flags: MessageFlags.Ephemeral });
-        store.products[prodName].price = price;
-        await saveStoreData(store);
-        return i.reply({ content: `✅ Price for **${prodName}** set to **${price}**.`, flags: MessageFlags.Ephemeral });
-      }
-      if (name === 'removeprice') {
-        if (!store.products[prodName]) return i.reply({ content: `❌ Product **${prodName}** does not exist.`, flags: MessageFlags.Ephemeral });
-        store.products[prodName].price = 'N/A';
-        await saveStoreData(store);
-        return i.reply({ content: `✅ Price for **${prodName}** removed.`, flags: MessageFlags.Ephemeral });
       }
     }
 
@@ -764,7 +753,45 @@ client.on('interactionCreate', async (i) => {
     }
   }
 
-  // Purchase flow handling (VOOR het ticket wordt aangemaakt)
+  // Modals voor Store Beheer
+  if (i.isModalSubmit()) {
+    if (i.customId === 'modal_add_section') {
+      const name = i.fields.getTextInputValue('section_name');
+      const store = await getStoreData();
+      if (!store.sections[name]) store.sections[name] = [];
+      store.lastSection = name;
+      await saveStoreData(store);
+      await updateStorePanel();
+      return i.reply({ content: `✅ Section **${name}** added.`, flags: MessageFlags.Ephemeral });
+    }
+
+    if (i.customId === 'modal_add_service') {
+      const name = i.fields.getTextInputValue('service_name');
+      const store = await getStoreData();
+      if (!store.lastSection) return i.reply({ content: '❌ No active section. Add a section first.', flags: MessageFlags.Ephemeral });
+      if (!store.sections[store.lastSection].includes(name)) store.sections[store.lastSection].push(name);
+      if (!store.services[name]) store.services[name] = [];
+      store.lastService = name;
+      await saveStoreData(store);
+      await updateStorePanel();
+      return i.reply({ content: `✅ Service **${name}** added to **${store.lastSection}**.`, flags: MessageFlags.Ephemeral });
+    }
+
+    if (i.customId === 'modal_add_product') {
+      const name = i.fields.getTextInputValue('product_name');
+      const price = i.fields.getTextInputValue('product_price');
+      const store = await getStoreData();
+      if (!store.lastService) return i.reply({ content: '❌ No active service. Add a service first.', flags: MessageFlags.Ephemeral });
+      if (!store.services[store.lastService].includes(name)) store.services[store.lastService].push(name);
+      if (!store.products[name]) store.products[name] = {};
+      store.products[name].price = price;
+      store.lastProduct = name;
+      await saveStoreData(store);
+      await updateStorePanel();
+      return i.reply({ content: `✅ Product **${name}** added to **${store.lastService}** for **${price}**.`, flags: MessageFlags.Ephemeral });
+    }
+  }
+
   if (i.isStringSelectMenu()) {
     const userId = i.user.id;
 
@@ -775,7 +802,6 @@ client.on('interactionCreate', async (i) => {
       if (!cat) return i.editReply({ content: '❌ Unknown category.' });
 
       if (choice === 'purchase') {
-        // Start de purchase flow VOOR we een ticket maken
         const store = await getStoreData();
         const sections = Object.keys(store.sections);
         
@@ -796,7 +822,6 @@ client.on('interactionCreate', async (i) => {
         });
       }
 
-      // Als het geen purchase is, maak direct een ticket aan (Support of Bug)
       try {
         const guild = i.guild;
         const tickets = await getTickets();
@@ -889,7 +914,6 @@ client.on('interactionCreate', async (i) => {
       const price = store.products[data.product]?.price || 'N/A';
       const paymentName = PAYMENT_METHODS[data.payment];
 
-      // Nu maken we het ticket aan
       await i.update({ content: '✅ Creating your ticket...', components: [] });
 
       try {
@@ -975,6 +999,31 @@ client.on('interactionCreate', async (i) => {
   }
 
   if (i.isButton()) {
+    if (i.customId === 'store_add_section') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      const modal = new ModalBuilder().setCustomId('modal_add_section').setTitle('Add Section');
+      const input = new TextInputBuilder().setCustomId('section_name').setLabel('Section Name').setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return i.showModal(modal);
+    }
+
+    if (i.customId === 'store_add_service') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      const modal = new ModalBuilder().setCustomId('modal_add_service').setTitle('Add Service');
+      const input = new TextInputBuilder().setCustomId('service_name').setLabel('Service Name').setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return i.showModal(modal);
+    }
+
+    if (i.customId === 'store_add_product') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      const modal = new ModalBuilder().setCustomId('modal_add_product').setTitle('Add Product');
+      const input1 = new TextInputBuilder().setCustomId('product_name').setLabel('Product Name').setStyle(TextInputStyle.Short).setRequired(true);
+      const input2 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. €5.00)').setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
+      return i.showModal(modal);
+    }
+
     // VERIFY
     if (i.customId === 'verify_accept_rules') {
       if (i.member.roles.cache.has(VERIFIED_ROLE_ID)) return i.reply({ content: '❌ You are already verified!', flags: MessageFlags.Ephemeral });
