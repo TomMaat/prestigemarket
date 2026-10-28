@@ -26,23 +26,23 @@ const GIST_ID = process.env.GIST_ID;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const PORT = process.env.PORT || 3000;
 
-// ===== Instellingen =====
+// ===== Settings =====
 const LOGO = 'https://cdn.discordapp.com/attachments/1564064006837244015/1564414389166014604/EC6CB4B8-367B-42B8-9E92-EF824122CBD9.png?ex=6ae1d6af&is=6ae0852f&hm=ff0e31a6b2668956d70437b411170db595a49c0b21e84ea425e6c8cd689adff0&';
 const FOOTER_TEXT = 'Prestige Market';
 
-// Kanalen
-const VERIFY_CHANNEL_ID = '1564632375336505344'; 
+// Channels
+const VERIFY_CHANNEL_ID = '1564632375336505344';
 const LEGIT_CHANNEL_ID = '1564553823270342758';
 const TICKET_PANEL_CHANNEL_ID = '1564415332737884233';
-const LOG_CHANNEL_ID = '1555729409535774833'; 
+const LOG_CHANNEL_ID = '1555729409535774833';
 const TICKET_TRANSCRIPT_CHANNEL_ID = '1564415332737884234';
 const VOUCH_CHANNEL_ID = '1564555149865656401';
 const STORE_PANEL_CHANNEL_ID = '1564761625104490607';
 
-// Rollen
+// Roles
 const VERIFIED_ROLE_ID = '1564415134171013154';
 const VOUCH_ROLE_ID = '1564635023787950090';
-const MAIN_TAG_ROLE_ID = '1564638227204149258'; 
+const MAIN_TAG_ROLE_ID = '1564638227204149258';
 const STAFF_ROLE_IDS = [
   '1564419989002256516',
   '1564415131054772295',
@@ -59,7 +59,6 @@ const TICKET_CATEGORIES = {
   notlegit: { name: 'Not Legit Proof', prefix: 'notlegit', categoryId: NOT_LEGIT_TICKET_CATEGORY_ID, emoji: '❌', color: 0xff4444 },
 };
 
-// Lijst met toegestane kanalen voor /move
 const ALLOWED_MOVE_CATEGORIES = {
   '1564627077880094801': 'Support',
   '1564627178384007249': 'Purchase',
@@ -68,7 +67,6 @@ const ALLOWED_MOVE_CATEGORIES = {
   '1564636952676802700': 'Other/Archive'
 };
 
-// Betaalmethodes
 const PAYMENT_METHODS = {
   ideal: 'iDeal',
   paypal: 'PayPal',
@@ -76,11 +74,9 @@ const PAYMENT_METHODS = {
   bank: 'Bank Transfer'
 };
 
-// Tijdelijke opslag voor purchase keuzes (per user)
 const pendingPurchases = new Map();
 
-// ===== De Regels =====
-const RULES_TEXT = 
+const RULES_TEXT =
   "**1. PAYMENTS**\n" +
   "> • Only use the official payment methods provided by Prestige.\n" +
   "> • Double-check your order and total price before paying.\n" +
@@ -129,7 +125,7 @@ async function readGist() {
   });
   if (!res.ok) throw new Error(`Gist read failed: ${res.status}`);
   const data = await res.json();
-  
+
   if (!data.files || !data.files['data.json']) {
     return {
       legitVotes: { approve: [], reject: [] },
@@ -184,8 +180,8 @@ async function setVerifyMessageId(id) { const d = await readGist(); d.verifyMess
 async function getTickets() { const d = await readGist(); return d.tickets; }
 async function saveTickets(t) { const d = await readGist(); d.tickets = t; await writeGist(d); }
 async function addTicket(channelId, userId, categoryKey, extraData = {}) {
-  const t = await getTickets(); 
-  t[channelId] = { userId, categorie: categoryKey, gestart: Date.now(), extraUsers: [], ...extraData }; 
+  const t = await getTickets();
+  t[channelId] = { userId, categorie: categoryKey, gestart: Date.now(), extraUsers: [], ...extraData };
   await saveTickets(t);
 }
 async function removeTicket(channelId) {
@@ -215,7 +211,6 @@ async function setNotLegitStatus(channelId, status) {
 async function readVouchCounter() { const d = await readGist(); return d.vouchCounter; }
 async function writeVouchCounter(n) { const d = await readGist(); d.vouchCounter = n; await writeGist(d); }
 
-// Store Data
 async function getStoreData() { const d = await readGist(); return d.storeData; }
 async function saveStoreData(s) { const d = await readGist(); d.storeData = s; await writeGist(d); }
 
@@ -238,7 +233,7 @@ async function sendLog(title, description, color = 0x5865f2, fields = []) {
       .setDescription(description)
       .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
       .setTimestamp();
-      
+
     if (fields.length > 0) embed.addFields(fields);
 
     await logChannel.send({ embeds: [embed] });
@@ -247,7 +242,7 @@ async function sendLog(title, description, color = 0x5865f2, fields = []) {
   }
 }
 
-// ===== STATUS SYSTEEM =====
+// ===== STATUS SYSTEM =====
 let statusState = 0;
 let cachedVouches = 0;
 
@@ -257,11 +252,11 @@ async function updateBotStatus() {
     if (!guild) return;
 
     if (statusState === 0) {
-      client.user.setActivity(`${guild.memberCount} Discord Members`, { type: 3 }); 
+      client.user.setActivity(`${guild.memberCount} Discord Members`, { type: 3 });
     } else {
-      client.user.setActivity(`${cachedVouches} Vouches`, { type: 3 }); 
+      client.user.setActivity(`${cachedVouches} Vouches`, { type: 3 });
     }
-    
+
     statusState = (statusState + 1) % 2;
   } catch (error) {
     console.error("Failed to update status:", error);
@@ -279,10 +274,10 @@ function startStatusInterval() {
   refreshCounters();
   updateBotStatus();
   setInterval(refreshCounters, 60000);
-  setInterval(updateBotStatus, 10000); 
+  setInterval(updateBotStatus, 10000);
 }
 
-// ===== LEGIT SYSTEEM =====
+// ===== LEGIT SYSTEM =====
 function buildLegitEmbed(votes, confirmedRejects = []) {
   const confirmedCount = confirmedRejects.length;
   return new EmbedBuilder()
@@ -308,7 +303,7 @@ function buildLegitRow(votes) {
 async function setupLegit() {
   try {
     const channel = await client.channels.fetch(LEGIT_CHANNEL_ID).catch(() => null);
-    
+
     if (!channel || !channel.isTextBased()) {
       console.error(`❌ Legit channel (${LEGIT_CHANNEL_ID}) not found.`);
       return;
@@ -334,12 +329,12 @@ async function setupLegit() {
     const newMsg = await channel.send({ embeds: [embed], components: [row] });
     await setLegitMessageId(newMsg.id);
     console.log('✅ Legit poll placed');
-  } catch (e) { 
-    console.error('Legit setup error:', e.message); 
+  } catch (e) {
+    console.error('Legit setup error:', e.message);
   }
 }
 
-// ===== VERIFY SYSTEEM =====
+// ===== VERIFY SYSTEM =====
 async function updateVerifyMessage() {
   try {
     const channel = await client.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
@@ -350,7 +345,7 @@ async function updateVerifyMessage() {
 
     const guild = channel.guild;
     await guild.members.fetch();
-    
+
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
     const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
 
@@ -413,7 +408,7 @@ async function setupVerify() {
   } catch (e) { console.error('Verify setup error:', e.message); }
 }
 
-// ===== STORE MANAGEMENT SYSTEEM =====
+// ===== STORE MANAGEMENT SYSTEM =====
 function buildStoreEmbed(store) {
   const embed = new EmbedBuilder()
     .setTitle('🛒 Store Management')
@@ -424,24 +419,45 @@ function buildStoreEmbed(store) {
 
   if (Object.keys(store.sections).length === 0) {
     embed.setDescription('*No sections configured yet.*\n\nUse the buttons below to add sections, services, and products.');
-  } else {
-    for (const [section, services] of Object.entries(store.sections)) {
-      let sectionText = '';
-      if (services.length === 0) sectionText = '*No services*';
-      for (const service of services) {
+    return embed;
+  }
+
+  for (const [section, services] of Object.entries(store.sections)) {
+    let sectionText = '';
+
+    if (services.length === 0) {
+      sectionText = '└ *No services*';
+    } else {
+      services.forEach((service, sIndex) => {
+        const isLastService = sIndex === services.length - 1;
+        const serviceBranch = isLastService ? '└' : '├';
+        const serviceIndent = isLastService ? '  ' : '│ ';
+
+        sectionText += `${serviceBranch} **${service}**\n`;
+
         const products = store.services[service] || [];
-        let productText = '';
-        if (products.length === 0) productText = '  └ *No products*';
-        for (const prod of products) {
-          const p = store.products[prod];
-          const price = p?.price || 'N/A';
-          const amount = p?.amount ? ` per ${p.amount}` : '';
-          productText += `  └ ${prod} (${price}${amount})\n`;
+        if (products.length === 0) {
+          sectionText += `${serviceIndent}└ *No products*\n`;
+        } else {
+          products.forEach((prod, pIndex) => {
+            const isLastProduct = pIndex === products.length - 1;
+            const productBranch = isLastProduct ? '└' : '├';
+            const productIndent = isLastProduct ? '  ' : '│ ';
+
+            sectionText += `${serviceIndent}${productBranch} ${prod}\n`;
+
+            const p = store.products[prod];
+            const price = p?.price || 'N/A';
+            const amount = p?.amount ? ` per ${p.amount}` : '';
+
+            sectionText += `${serviceIndent}${productIndent}└ 💰 ${price}${amount}\n`;
+          });
         }
-        sectionText += `**${service}**\n${productText}`;
-      }
-      embed.addFields({ name: `🔹 ${section}`, value: sectionText || '*Empty*', inline: false });
+      });
     }
+
+    if (sectionText.length > 1024) sectionText = sectionText.slice(0, 1000) + '\n... *(truncated)*';
+    embed.addFields({ name: `🔹 ${section}`, value: sectionText || '*Empty*', inline: false });
   }
 
   return embed;
@@ -491,7 +507,7 @@ async function updateStorePanel() {
   } catch (e) { console.error('Failed to update store panel:', e.message); }
 }
 
-// ===== TICKET SYSTEEM =====
+// ===== TICKET SYSTEM =====
 function buildTicketPanelEmbed() {
   return new EmbedBuilder()
     .setTitle('🎫 Prestige Support')
@@ -553,7 +569,7 @@ async function closeTicket(channel, closerId) {
     const { html, messageCount } = await makeTranscript(channel);
     const buffer = Buffer.from(html, 'utf-8');
     const attachment = new AttachmentBuilder(buffer, { name: `transcript-${channel.name}.html` });
-    
+
     const transcriptChannel = await client.channels.fetch(TICKET_TRANSCRIPT_CHANNEL_ID).catch(() => null);
     const cat = TICKET_CATEGORIES[ticket.categorie];
 
@@ -653,7 +669,7 @@ client.on('interactionCreate', async (i) => {
 
         await channel.send({ embeds: [embed] });
         await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}).`, 0x00ff88);
-        
+
         try { await i.user.send({ content: `✅ Your vouch has been successfully posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (err) {}
 
         return i.editReply({ content: `✅ Vouch posted!` });
@@ -669,7 +685,7 @@ client.on('interactionCreate', async (i) => {
       await setupTicketPanel();
       return i.editReply({ content: '✅ Ticket panel placed!' });
     }
-    
+
     if (name === 'refreshverify') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
@@ -736,10 +752,10 @@ client.on('interactionCreate', async (i) => {
     if (name === 'move') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
       if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
-      
+
       const selectMenu = new StringSelectMenuBuilder()
         .setCustomId('move_ticket_select')
-        .setPlaceholder('Kies een categorie...')
+        .setPlaceholder('Choose a category...')
         .addOptions(Object.entries(ALLOWED_MOVE_CATEGORIES).map(([id, name]) => ({
           label: name,
           value: id
@@ -747,11 +763,10 @@ client.on('interactionCreate', async (i) => {
 
       const row = new ActionRowBuilder().addComponents(selectMenu);
 
-      return i.reply({ content: 'Kies de categorie waar je dit ticket naartoe wilt verplaatsen:', components: [row], flags: MessageFlags.Ephemeral });
+      return i.reply({ content: 'Choose the category to move this ticket to:', components: [row], flags: MessageFlags.Ephemeral });
     }
   }
 
-  // Modals voor Store Beheer
   if (i.isModalSubmit()) {
     if (i.customId === 'modal_add_section') {
       const name = i.fields.getTextInputValue('section_name');
@@ -806,15 +821,15 @@ client.on('interactionCreate', async (i) => {
       const product = i.customId.replace('modal_purchase_amount_', '');
       const amountStr = i.fields.getTextInputValue('quantity');
       const quantity = parseInt(amountStr);
-      
+
       if (isNaN(quantity) || quantity <= 0) {
-        return i.reply({ content: '❌ Ongeldige hoeveelheid. Voer een getal in.', flags: MessageFlags.Ephemeral });
+        return i.reply({ content: '❌ Invalid quantity. Enter a number.', flags: MessageFlags.Ephemeral });
       }
 
       const store = await getStoreData();
       const prodData = store.products[product];
       if (!prodData || prodData.price === 'N/A') {
-        return i.reply({ content: '❌ Prijs niet ingesteld voor dit product.', flags: MessageFlags.Ephemeral });
+        return i.reply({ content: '❌ Price not set for this product.', flags: MessageFlags.Ephemeral });
       }
 
       const pricePer = parseFloat(prodData.price.replace('€', '').trim());
@@ -849,7 +864,7 @@ client.on('interactionCreate', async (i) => {
       if (choice === 'purchase') {
         const store = await getStoreData();
         const sections = Object.keys(store.sections);
-        
+
         if (sections.length === 0) {
           return i.editReply({ content: '❌ No store sections configured yet. Please contact staff.' });
         }
@@ -861,8 +876,8 @@ client.on('interactionCreate', async (i) => {
           .setPlaceholder('Select a section')
           .addOptions(sections.map(s => ({ label: s, value: s })));
 
-        return i.editReply({ 
-          content: 'Which section do you want to buy?', 
+        return i.editReply({
+          content: 'Which section do you want to buy?',
           components: [new ActionRowBuilder().addComponents(menu)],
         });
       }
@@ -898,9 +913,7 @@ client.on('interactionCreate', async (i) => {
       return;
     }
 
-    // Store dropdowns
     if (i.customId === 'select_section_for_service') {
-      const store = await getStoreData();
       const section = i.values[0];
       const modal = new ModalBuilder().setCustomId(`modal_add_service_${section}`).setTitle('Add Service');
       const input = new TextInputBuilder().setCustomId('service_name').setLabel('Service Name').setStyle(TextInputStyle.Short).setRequired(true);
@@ -909,7 +922,6 @@ client.on('interactionCreate', async (i) => {
     }
 
     if (i.customId === 'select_service_for_product') {
-      const store = await getStoreData();
       const service = i.values[0];
       const modal = new ModalBuilder().setCustomId(`modal_add_product_${service}`).setTitle('Add Product');
       const input = new TextInputBuilder().setCustomId('product_name').setLabel('Product Name').setStyle(TextInputStyle.Short).setRequired(true);
@@ -918,7 +930,6 @@ client.on('interactionCreate', async (i) => {
     }
 
     if (i.customId === 'select_product_for_price') {
-      const store = await getStoreData();
       const product = i.values[0];
       const modal = new ModalBuilder().setCustomId(`modal_add_price_${product}`).setTitle('Add Price');
       const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. €5.00)').setStyle(TextInputStyle.Short).setRequired(true);
@@ -927,16 +938,15 @@ client.on('interactionCreate', async (i) => {
       return i.showModal(modal);
     }
 
-    // Purchase dropdowns
     if (i.customId === 'purchase_section') {
       const data = pendingPurchases.get(userId);
       if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
-      
+
       data.section = i.values[0];
       const store = await getStoreData();
       const services = store.sections[data.section] || [];
-      
-      if (services.length === 0) return i.update({ content: '❌ Geen services gevonden voor deze sectie.', components: [] });
+
+      if (services.length === 0) return i.update({ content: '❌ No services found for this section.', components: [] });
 
       const menu = new StringSelectMenuBuilder()
         .setCustomId('purchase_service')
@@ -953,15 +963,15 @@ client.on('interactionCreate', async (i) => {
       data.service = i.values[0];
       const store = await getStoreData();
       const products = store.services[data.service] || [];
-      
-      if (products.length === 0) return i.update({ content: '❌ Geen producten gevonden voor deze service.', components: [] });
+
+      if (products.length === 0) return i.update({ content: '❌ No products found for this service.', components: [] });
 
       const menu = new StringSelectMenuBuilder()
         .setCustomId('purchase_product')
-        .setPlaceholder('Which sort product do you want to buy?')
+        .setPlaceholder('Which product do you want to buy?')
         .addOptions(products.map(p => ({ label: `${p} (${store.products[p]?.price || 'N/A'} per ${store.products[p]?.amount || 'N/A'})`, value: p })));
 
-      return i.update({ content: 'Which sort product do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
+      return i.update({ content: 'Which product do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
     if (i.customId === 'purchase_product') {
@@ -973,7 +983,7 @@ client.on('interactionCreate', async (i) => {
       const prod = store.products[data.product];
 
       if (!prod || prod.price === 'N/A' || !prod.amount) {
-        return i.update({ content: '❌ Prijs of hoeveelheid niet ingesteld voor dit product.', components: [] });
+        return i.update({ content: '❌ Price or amount not set for this product.', components: [] });
       }
 
       const modal = new ModalBuilder().setCustomId(`modal_purchase_amount_${data.product}`).setTitle('Enter Quantity');
@@ -1042,7 +1052,7 @@ client.on('interactionCreate', async (i) => {
 
         await ticketChannel.send({ content: `<@${userId}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
         await sendLog('🛒 Purchase Started', `<@${userId}> started a purchase: **${data.quantity}** of **${data.product}** (${data.total}) via **${paymentName}**.`, 0x00ff88);
-        
+
         pendingPurchases.delete(userId);
         await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
       } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
@@ -1052,7 +1062,7 @@ client.on('interactionCreate', async (i) => {
     if (i.customId === 'move_ticket_select') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
-      
+
       const tickets = await getTickets();
       const ticket = tickets[i.channelId];
       if (!ticket) return i.editReply({ content: '❌ This is not an active ticket.' });
@@ -1089,12 +1099,12 @@ client.on('interactionCreate', async (i) => {
       const store = await getStoreData();
       const sections = Object.keys(store.sections);
       if (sections.length === 0) return i.reply({ content: '❌ Add a section first.', flags: MessageFlags.Ephemeral });
-      
+
       const menu = new StringSelectMenuBuilder()
         .setCustomId('select_section_for_service')
         .setPlaceholder('Select a section')
         .addOptions(sections.map(s => ({ label: s, value: s })));
-        
+
       return i.reply({ content: 'Which section does this service belong to?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
     }
 
@@ -1103,12 +1113,12 @@ client.on('interactionCreate', async (i) => {
       const store = await getStoreData();
       const services = Object.keys(store.services);
       if (services.length === 0) return i.reply({ content: '❌ Add a service first.', flags: MessageFlags.Ephemeral });
-      
+
       const menu = new StringSelectMenuBuilder()
         .setCustomId('select_service_for_product')
         .setPlaceholder('Select a service')
         .addOptions(services.map(s => ({ label: s, value: s })));
-        
+
       return i.reply({ content: 'Which service does this product belong to?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
     }
 
@@ -1117,16 +1127,15 @@ client.on('interactionCreate', async (i) => {
       const store = await getStoreData();
       const products = Object.keys(store.products);
       if (products.length === 0) return i.reply({ content: '❌ Add a product first.', flags: MessageFlags.Ephemeral });
-      
+
       const menu = new StringSelectMenuBuilder()
         .setCustomId('select_product_for_price')
         .setPlaceholder('Select a product')
         .addOptions(products.map(p => ({ label: p, value: p })));
-        
+
       return i.reply({ content: 'Which product do you want to set a price for?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
     }
 
-    // VERIFY
     if (i.customId === 'verify_accept_rules') {
       if (i.member.roles.cache.has(VERIFIED_ROLE_ID)) return i.reply({ content: '❌ You are already verified!', flags: MessageFlags.Ephemeral });
       try {
@@ -1137,7 +1146,6 @@ client.on('interactionCreate', async (i) => {
       return;
     }
 
-    // LEGIT APPROVE
     if (i.customId === 'legit_approve') {
       try {
         const votes = await getLegitVotes();
@@ -1156,7 +1164,6 @@ client.on('interactionCreate', async (i) => {
       return;
     }
 
-    // LEGIT REJECT
     if (i.customId === 'legit_reject') {
       try {
         const guild = await client.guilds.fetch(GUILD_ID);
@@ -1201,7 +1208,6 @@ client.on('interactionCreate', async (i) => {
       return;
     }
 
-    // NOT-LEGIT REVIEW
     if (i.customId === 'notlegit_positive' || i.customId === 'notlegit_false') {
       if (!isStaff(i.member)) return i.reply({ content: `❌ Only staff can review this.`, flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
@@ -1237,7 +1243,6 @@ client.on('interactionCreate', async (i) => {
       return;
     }
 
-    // TICKET CLOSE
     if (i.customId === 'ticket_close') {
       const tickets = await getTickets();
       const ticket = tickets[i.channelId];
@@ -1250,7 +1255,7 @@ client.on('interactionCreate', async (i) => {
   }
 });
 
-// ===== EVENTS VOOR VERIFY UPDATE =====
+// ===== EVENTS =====
 client.on('guildMemberAdd', async (member) => {
   if (member.guild.id !== GUILD_ID) return;
   try {
@@ -1277,13 +1282,13 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 client.once('ready', async () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
   startStatusInterval();
-  
+
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupVerify();
-  
+
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupLegit();
-  
+
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupTicketPanel();
 
