@@ -248,7 +248,7 @@ async function sendLog(title, description, color = 0x5865f2, fields = []) {
 }
 
 // ===== STATUS SYSTEEM =====
-let statusState = 0; // 0 = Members, 1 = Vouches
+let statusState = 0;
 let cachedVouches = 0;
 
 async function updateBotStatus() {
@@ -433,18 +433,15 @@ function buildStoreEmbed(store) {
         let productText = '';
         if (products.length === 0) productText = '  └ *No products*';
         for (const prod of products) {
-          const price = store.products[prod]?.price || 'N/A';
-          productText += `  └ ${prod} (${price})\n`;
+          const p = store.products[prod];
+          const price = p?.price || 'N/A';
+          const amount = p?.amount ? ` per ${p.amount}` : '';
+          productText += `  └ ${prod} (${price}${amount})\n`;
         }
         sectionText += `**${service}**\n${productText}`;
       }
       embed.addFields({ name: `🔹 ${section}`, value: sectionText || '*Empty*', inline: false });
     }
-    embed.addFields({ 
-      name: 'ℹ️ Info', 
-      value: `**Last Section:** ${store.lastSection || 'None'}\n**Last Service:** ${store.lastService || 'None'}\n**Last Product:** ${store.lastProduct || 'None'}`, 
-      inline: false 
-    });
   }
 
   return embed;
@@ -454,7 +451,8 @@ function buildStoreRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('store_add_section').setLabel('Add Section').setEmoji('➕').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('store_add_service').setLabel('Add Service').setEmoji('➕').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('store_add_product').setLabel('Add Product').setEmoji('➕').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId('store_add_product').setLabel('Add Product').setEmoji('➕').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('store_add_price').setLabel('Add Price').setEmoji('💰').setStyle(ButtonStyle.Danger)
   );
 }
 
@@ -765,30 +763,77 @@ client.on('interactionCreate', async (i) => {
       return i.reply({ content: `✅ Section **${name}** added.`, flags: MessageFlags.Ephemeral });
     }
 
-    if (i.customId === 'modal_add_service') {
+    if (i.customId.startsWith('modal_add_service_')) {
+      const section = i.customId.replace('modal_add_service_', '');
       const name = i.fields.getTextInputValue('service_name');
       const store = await getStoreData();
-      if (!store.lastSection) return i.reply({ content: '❌ No active section. Add a section first.', flags: MessageFlags.Ephemeral });
-      if (!store.sections[store.lastSection].includes(name)) store.sections[store.lastSection].push(name);
+      if (!store.sections[section]) return i.reply({ content: '❌ Section not found.', flags: MessageFlags.Ephemeral });
+      if (!store.sections[section].includes(name)) store.sections[section].push(name);
       if (!store.services[name]) store.services[name] = [];
       store.lastService = name;
       await saveStoreData(store);
       await updateStorePanel();
-      return i.reply({ content: `✅ Service **${name}** added to **${store.lastSection}**.`, flags: MessageFlags.Ephemeral });
+      return i.reply({ content: `✅ Service **${name}** added to **${section}**.`, flags: MessageFlags.Ephemeral });
     }
 
-    if (i.customId === 'modal_add_product') {
+    if (i.customId.startsWith('modal_add_product_')) {
+      const service = i.customId.replace('modal_add_product_', '');
       const name = i.fields.getTextInputValue('product_name');
-      const price = i.fields.getTextInputValue('product_price');
       const store = await getStoreData();
-      if (!store.lastService) return i.reply({ content: '❌ No active service. Add a service first.', flags: MessageFlags.Ephemeral });
-      if (!store.services[store.lastService].includes(name)) store.services[store.lastService].push(name);
+      if (!store.services[service]) return i.reply({ content: '❌ Service not found.', flags: MessageFlags.Ephemeral });
+      if (!store.services[service].includes(name)) store.services[service].push(name);
       if (!store.products[name]) store.products[name] = {};
-      store.products[name].price = price;
       store.lastProduct = name;
       await saveStoreData(store);
       await updateStorePanel();
-      return i.reply({ content: `✅ Product **${name}** added to **${store.lastService}** for **${price}**.`, flags: MessageFlags.Ephemeral });
+      return i.reply({ content: `✅ Product **${name}** added to **${service}**.`, flags: MessageFlags.Ephemeral });
+    }
+
+    if (i.customId.startsWith('modal_add_price_')) {
+      const product = i.customId.replace('modal_add_price_', '');
+      const price = i.fields.getTextInputValue('product_price');
+      const amount = i.fields.getTextInputValue('product_amount');
+      const store = await getStoreData();
+      if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
+      store.products[product].price = price;
+      store.products[product].amount = amount;
+      await saveStoreData(store);
+      await updateStorePanel();
+      return i.reply({ content: `✅ Price for **${product}** set to **${price}** per **${amount}**.`, flags: MessageFlags.Ephemeral });
+    }
+
+    if (i.customId.startsWith('modal_purchase_amount_')) {
+      const product = i.customId.replace('modal_purchase_amount_', '');
+      const amountStr = i.fields.getTextInputValue('quantity');
+      const quantity = parseInt(amountStr);
+      
+      if (isNaN(quantity) || quantity <= 0) {
+        return i.reply({ content: '❌ Ongeldige hoeveelheid. Voer een getal in.', flags: MessageFlags.Ephemeral });
+      }
+
+      const store = await getStoreData();
+      const prodData = store.products[product];
+      if (!prodData || prodData.price === 'N/A') {
+        return i.reply({ content: '❌ Prijs niet ingesteld voor dit product.', flags: MessageFlags.Ephemeral });
+      }
+
+      const pricePer = parseFloat(prodData.price.replace('€', '').trim());
+      const amountPer = parseInt(prodData.amount);
+      const total = ((pricePer / amountPer) * quantity).toFixed(2);
+
+      const data = pendingPurchases.get(i.user.id);
+      if (!data) return i.reply({ content: '❌ Session expired.', flags: MessageFlags.Ephemeral });
+
+      data.product = product;
+      data.quantity = quantity;
+      data.total = `€${total}`;
+
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('purchase_payment')
+        .setPlaceholder('Select payment method')
+        .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key })));
+
+      return i.update({ content: `You want **${quantity}** of **${product}**. Total: **€${total}**.\n\nSelect your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
   }
 
@@ -809,7 +854,7 @@ client.on('interactionCreate', async (i) => {
           return i.editReply({ content: '❌ No store sections configured yet. Please contact staff.' });
         }
 
-        pendingPurchases.set(userId, { section: null, service: null, product: null, payment: null });
+        pendingPurchases.set(userId, { section: null, service: null, product: null, quantity: null, total: null, payment: null });
 
         const menu = new StringSelectMenuBuilder()
           .setCustomId('purchase_section')
@@ -853,6 +898,36 @@ client.on('interactionCreate', async (i) => {
       return;
     }
 
+    // Store dropdowns
+    if (i.customId === 'select_section_for_service') {
+      const store = await getStoreData();
+      const section = i.values[0];
+      const modal = new ModalBuilder().setCustomId(`modal_add_service_${section}`).setTitle('Add Service');
+      const input = new TextInputBuilder().setCustomId('service_name').setLabel('Service Name').setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return i.showModal(modal);
+    }
+
+    if (i.customId === 'select_service_for_product') {
+      const store = await getStoreData();
+      const service = i.values[0];
+      const modal = new ModalBuilder().setCustomId(`modal_add_product_${service}`).setTitle('Add Product');
+      const input = new TextInputBuilder().setCustomId('product_name').setLabel('Product Name').setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return i.showModal(modal);
+    }
+
+    if (i.customId === 'select_product_for_price') {
+      const store = await getStoreData();
+      const product = i.values[0];
+      const modal = new ModalBuilder().setCustomId(`modal_add_price_${product}`).setTitle('Add Price');
+      const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. €5.00)').setStyle(TextInputStyle.Short).setRequired(true);
+      const input2 = new TextInputBuilder().setCustomId('product_amount').setLabel('Amount (e.g. 1000)').setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
+      return i.showModal(modal);
+    }
+
+    // Purchase dropdowns
     if (i.customId === 'purchase_section') {
       const data = pendingPurchases.get(userId);
       if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
@@ -884,7 +959,7 @@ client.on('interactionCreate', async (i) => {
       const menu = new StringSelectMenuBuilder()
         .setCustomId('purchase_product')
         .setPlaceholder('Which sort product do you want to buy?')
-        .addOptions(products.map(p => ({ label: `${p} (${store.products[p]?.price || 'N/A'})`, value: p })));
+        .addOptions(products.map(p => ({ label: `${p} (${store.products[p]?.price || 'N/A'} per ${store.products[p]?.amount || 'N/A'})`, value: p })));
 
       return i.update({ content: 'Which sort product do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
     }
@@ -895,14 +970,16 @@ client.on('interactionCreate', async (i) => {
 
       data.product = i.values[0];
       const store = await getStoreData();
-      const price = store.products[data.product]?.price || 'N/A';
+      const prod = store.products[data.product];
 
-      const menu = new StringSelectMenuBuilder()
-        .setCustomId('purchase_payment')
-        .setPlaceholder('Select payment method')
-        .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key })));
+      if (!prod || prod.price === 'N/A' || !prod.amount) {
+        return i.update({ content: '❌ Prijs of hoeveelheid niet ingesteld voor dit product.', components: [] });
+      }
 
-      return i.update({ content: `You chose **${data.product}** for **${price}**. Select your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
+      const modal = new ModalBuilder().setCustomId(`modal_purchase_amount_${data.product}`).setTitle('Enter Quantity');
+      const input = new TextInputBuilder().setCustomId('quantity').setLabel(`How many? (Price: ${prod.price} per ${prod.amount})`).setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return i.showModal(modal);
     }
 
     if (i.customId === 'purchase_payment') {
@@ -910,8 +987,6 @@ client.on('interactionCreate', async (i) => {
       if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
 
       data.payment = i.values[0];
-      const store = await getStoreData();
-      const price = store.products[data.product]?.price || 'N/A';
       const paymentName = PAYMENT_METHODS[data.payment];
 
       await i.update({ content: '✅ Creating your ticket...', components: [] });
@@ -942,7 +1017,8 @@ client.on('interactionCreate', async (i) => {
           section: data.section,
           service: data.service,
           product: data.product,
-          price: price,
+          quantity: data.quantity,
+          total: data.total,
           payment: paymentName
         });
 
@@ -955,7 +1031,8 @@ client.on('interactionCreate', async (i) => {
             { name: 'Section', value: data.section, inline: true },
             { name: 'Service', value: data.service, inline: true },
             { name: 'Product', value: data.product, inline: true },
-            { name: 'Price', value: price, inline: true },
+            { name: 'Quantity', value: `${data.quantity}`, inline: true },
+            { name: 'Total Price', value: data.total, inline: true },
             { name: 'Payment Method', value: paymentName, inline: true }
           )
           .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
@@ -964,7 +1041,7 @@ client.on('interactionCreate', async (i) => {
         const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
 
         await ticketChannel.send({ content: `<@${userId}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
-        await sendLog('🛒 Purchase Started', `<@${userId}> started a purchase: **${data.product}** (${price}) via **${paymentName}**.`, 0x00ff88);
+        await sendLog('🛒 Purchase Started', `<@${userId}> started a purchase: **${data.quantity}** of **${data.product}** (${data.total}) via **${paymentName}**.`, 0x00ff88);
         
         pendingPurchases.delete(userId);
         await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
@@ -1009,19 +1086,44 @@ client.on('interactionCreate', async (i) => {
 
     if (i.customId === 'store_add_service') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const modal = new ModalBuilder().setCustomId('modal_add_service').setTitle('Add Service');
-      const input = new TextInputBuilder().setCustomId('service_name').setLabel('Service Name').setStyle(TextInputStyle.Short).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return i.showModal(modal);
+      const store = await getStoreData();
+      const sections = Object.keys(store.sections);
+      if (sections.length === 0) return i.reply({ content: '❌ Add a section first.', flags: MessageFlags.Ephemeral });
+      
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('select_section_for_service')
+        .setPlaceholder('Select a section')
+        .addOptions(sections.map(s => ({ label: s, value: s })));
+        
+      return i.reply({ content: 'Which section does this service belong to?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
     }
 
     if (i.customId === 'store_add_product') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const modal = new ModalBuilder().setCustomId('modal_add_product').setTitle('Add Product');
-      const input1 = new TextInputBuilder().setCustomId('product_name').setLabel('Product Name').setStyle(TextInputStyle.Short).setRequired(true);
-      const input2 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. €5.00)').setStyle(TextInputStyle.Short).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
-      return i.showModal(modal);
+      const store = await getStoreData();
+      const services = Object.keys(store.services);
+      if (services.length === 0) return i.reply({ content: '❌ Add a service first.', flags: MessageFlags.Ephemeral });
+      
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('select_service_for_product')
+        .setPlaceholder('Select a service')
+        .addOptions(services.map(s => ({ label: s, value: s })));
+        
+      return i.reply({ content: 'Which service does this product belong to?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+    }
+
+    if (i.customId === 'store_add_price') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      const store = await getStoreData();
+      const products = Object.keys(store.products);
+      if (products.length === 0) return i.reply({ content: '❌ Add a product first.', flags: MessageFlags.Ephemeral });
+      
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('select_product_for_price')
+        .setPlaceholder('Select a product')
+        .addOptions(products.map(p => ({ label: p, value: p })));
+        
+      return i.reply({ content: 'Which product do you want to set a price for?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
     }
 
     // VERIFY
@@ -1186,7 +1288,7 @@ client.once('ready', async () => {
   await setupTicketPanel();
 
   await new Promise(resolve => setTimeout(resolve, 3000));
-  await setupStorePanel(); // <-- Dit zorgt ervoor dat het paneel automatisch verschijnt
+  await setupStorePanel();
 });
 
 client.login(TOKEN);
