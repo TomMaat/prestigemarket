@@ -38,16 +38,16 @@ const VOUCH_CHANNEL_ID = '1564555149865656401';
 // Rollen
 const VERIFIED_ROLE_ID = '1564415134171013154';
 const VOUCH_ROLE_ID = '1564635023787950090';
-const NOT_LEGIT_TAG_ROLE_ID = '1564638227204149258'; // Alleen deze taggen bij Not Legit
+const MAIN_TAG_ROLE_ID = '1564638227204149258'; 
 const STAFF_ROLE_IDS = [
   '1564419989002256516',
   '1564415131054772295',
   '1564415129955729418',
-  '1564638227204149258'
+  MAIN_TAG_ROLE_ID
 ];
 
 // Ticket Categories
-const NOT_LEGIT_TICKET_CATEGORY_ID = '1564632244235014315'; // Aangepast naar jouw ID
+const NOT_LEGIT_TICKET_CATEGORY_ID = '1564632244235014315';
 const TICKET_CATEGORIES = {
   support: { name: 'Support', prefix: 'support', categoryId: '1564627077880094801', emoji: '🎫', color: 0x3498db },
   purchase: { name: 'Purchase', prefix: 'purchase', categoryId: '1564627178384007249', emoji: '🛒', color: 0x00ff88 },
@@ -62,6 +62,14 @@ const ALLOWED_MOVE_CATEGORIES = {
   '1564627295816122418': 'Bug',
   '1564632244235014315': 'Not Legit Proof',
   '1564636952676802700': 'Other/Archive'
+};
+
+// Betaalmethodes
+const PAYMENT_METHODS = {
+  ideal: 'iDeal',
+  paypal: 'PayPal',
+  crypto: 'Crypto (LTC)',
+  bank: 'Bank Transfer'
 };
 
 // ===== De Regels =====
@@ -124,6 +132,7 @@ async function readGist() {
       notlegitTickets: {},
       confirmedRejects: [],
       vouchCounter: 0,
+      storeData: { sections: {}, services: {}, products: {} },
     };
   }
 
@@ -136,6 +145,7 @@ async function readGist() {
     notlegitTickets: parsed.notlegitTickets || {},
     confirmedRejects: parsed.confirmedRejects || [],
     vouchCounter: parsed.vouchCounter || 0,
+    storeData: parsed.storeData || { sections: {}, services: {}, products: {} },
   };
 }
 
@@ -193,6 +203,10 @@ async function setNotLegitStatus(channelId, status) {
 
 async function readVouchCounter() { const d = await readGist(); return d.vouchCounter; }
 async function writeVouchCounter(n) { const d = await readGist(); d.vouchCounter = n; await writeGist(d); }
+
+// Store Data
+async function getStoreData() { const d = await readGist(); return d.storeData; }
+async function saveStoreData(s) { const d = await readGist(); d.storeData = s; await writeGist(d); }
 
 // ===== HELPERS =====
 function isStaff(member) {
@@ -492,6 +506,10 @@ const commands = [
       { name: 'extra', description: 'Extra information', type: 3, required: true }
     ]
   },
+  { name: 'addsection', description: 'Add a new section to the store', options: [{ name: 'name', description: 'Section name', type: 3, required: true }] },
+  { name: 'addservice', description: 'Add a service to a section', options: [{ name: 'section', description: 'Section name', type: 3, required: true }, { name: 'name', description: 'Service name', type: 3, required: true }] },
+  { name: 'addproduct', description: 'Add a product to a service', options: [{ name: 'service', description: 'Service name', type: 3, required: true }, { name: 'name', description: 'Product name', type: 3, required: true }] },
+  { name: 'addprice', description: 'Set the price of a product', options: [{ name: 'product', description: 'Product name', type: 3, required: true }, { name: 'price', description: 'Price (e.g. €5.00)', type: 3, required: true }] },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'close', description: 'Close this ticket' },
@@ -554,17 +572,56 @@ client.on('interactionCreate', async (i) => {
         
         await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}).`, 0x00ff88);
         
-        // DM naar de gebruiker
         try {
           await i.user.send({ content: `✅ Your vouch has been successfully posted in <#${VOUCH_CHANNEL_ID}>!` });
-        } catch (err) {
-          console.log(`Could not send DM to ${i.user.tag} (DMs closed).`);
-        }
+        } catch (err) {}
 
         return i.editReply({ content: `✅ Vouch posted!` });
       } catch (e) {
         console.error(e);
         return i.editReply({ content: `❌ Error: ${e.message}` });
+      }
+    }
+
+    if (name === 'addsection' || name === 'addservice' || name === 'addproduct' || name === 'addprice') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      
+      const store = await getStoreData();
+      
+      if (name === 'addsection') {
+        const secName = i.options.getString('name');
+        if (!store.sections[secName]) store.sections[secName] = [];
+        await saveStoreData(store);
+        return i.reply({ content: `✅ Section **${secName}** added.`, flags: MessageFlags.Ephemeral });
+      }
+      
+      if (name === 'addservice') {
+        const secName = i.options.getString('section');
+        const servName = i.options.getString('name');
+        if (!store.sections[secName]) return i.reply({ content: `❌ Section **${secName}** does not exist.`, flags: MessageFlags.Ephemeral });
+        if (!store.sections[secName].includes(servName)) store.sections[secName].push(servName);
+        if (!store.services[servName]) store.services[servName] = [];
+        await saveStoreData(store);
+        return i.reply({ content: `✅ Service **${servName}** added to **${secName}**.`, flags: MessageFlags.Ephemeral });
+      }
+      
+      if (name === 'addproduct') {
+        const servName = i.options.getString('service');
+        const prodName = i.options.getString('name');
+        if (!store.services[servName]) return i.reply({ content: `❌ Service **${servName}** does not exist.`, flags: MessageFlags.Ephemeral });
+        if (!store.services[servName].includes(prodName)) store.services[servName].push(prodName);
+        if (!store.products[prodName]) store.products[prodName] = { price: 'N/A' };
+        await saveStoreData(store);
+        return i.reply({ content: `✅ Product **${prodName}** added to **${servName}**.`, flags: MessageFlags.Ephemeral });
+      }
+      
+      if (name === 'addprice') {
+        const prodName = i.options.getString('product');
+        const price = i.options.getString('price');
+        if (!store.products[prodName]) return i.reply({ content: `❌ Product **${prodName}** does not exist.`, flags: MessageFlags.Ephemeral });
+        store.products[prodName].price = price;
+        await saveStoreData(store);
+        return i.reply({ content: `✅ Price for **${prodName}** set to **${price}**.`, flags: MessageFlags.Ephemeral });
       }
     }
 
@@ -671,88 +728,189 @@ client.on('interactionCreate', async (i) => {
     }
   }
 
-  if (i.isStringSelectMenu() && i.customId === 'move_ticket_select') {
-    if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-    
-    await i.deferReply({ flags: MessageFlags.Ephemeral });
-    
+  // Purchase flow handling
+  if (i.isStringSelectMenu()) {
     const tickets = await getTickets();
     const ticket = tickets[i.channelId];
-    if (!ticket) return i.editReply({ content: '❌ This is not an active ticket.' });
 
-    const newCategoryId = i.values[0];
-    const newCategoryName = ALLOWED_MOVE_CATEGORIES[newCategoryId];
-
-    try {
-      await i.channel.setParent(newCategoryId, { lockPermissions: false });
+    if (i.customId === 'purchase_section') {
+      const store = await getStoreData();
+      const section = i.values[0];
+      const services = store.sections[section] || [];
       
-      let newCatKey = null;
-      for (const [key, cat] of Object.entries(TICKET_CATEGORIES)) {
-        if (cat.categoryId === newCategoryId) {
-          newCatKey = key;
-          break;
-        }
+      if (services.length === 0) {
+        return i.update({ content: '❌ Geen services gevonden voor deze sectie.', components: [] });
       }
 
-      if (newCatKey) {
-        await updateTicketCategory(i.channelId, newCatKey);
-      }
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId(`purchase_service_${section}`)
+        .setPlaceholder('What service do you want to buy?')
+        .addOptions(services.map(s => ({ label: s, value: s })));
 
-      await i.channel.send({ content: `📁 Ticket has been moved to **${newCategoryName}** by <@${i.user.id}>.` });
-      await sendLog('📁 Ticket Moved', `<@${i.user.id}> moved ticket **#${i.channel.name}** to **${newCategoryName}**.`, 0xf39c12, [
-        { name: 'From', value: ticket.categorie || 'Unknown', inline: true },
-        { name: 'To', value: newCategoryName, inline: true }
-      ]);
-      await i.editReply({ content: `✅ Moved to **${newCategoryName}**.` });
-    } catch (e) {
-      await i.editReply({ content: `❌ Error: ${e.message}` });
+      return i.update({ content: 'What service do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
     }
-    return;
-  }
 
-  if (i.isStringSelectMenu() && i.customId === 'ticket_category_select') {
-    await i.deferReply({ flags: MessageFlags.Ephemeral });
-    const choice = i.values[0];
-    const cat = TICKET_CATEGORIES[choice];
-    if (!cat) return i.editReply({ content: '❌ Unknown category.' });
-
-    try {
-      const guild = i.guild;
-      const tickets = await getTickets();
-      if (Object.values(tickets).find(t => t.userId === i.user.id)) {
-        return i.editReply({ content: '❌ You already have an open ticket.' });
-      }
-
-      const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
-      const overwrites = [
-        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-        { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
-        { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
-      ];
-      for (const roleId of STAFF_ROLE_IDS) {
-        overwrites.push({ id: roleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] });
-      }
-
-      const ticketChannel = await guild.channels.create({
-        name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}`,
-      });
-
-      await addTicket(ticketChannel.id, i.user.id, choice);
-
-      const embed = new EmbedBuilder().setTitle(cat.name).setColor(cat.color).setDescription(`<@${i.user.id}> — Please describe your question below.`).setTimestamp();
-      const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-
-      const staffMentions = STAFF_ROLE_IDS.map(id => `<@&${id}>`).join(' ');
-      await ticketChannel.send({ content: `<@${i.user.id}> ${staffMentions}`, embeds: [embed], components: [closeRow] });
+    if (i.customId.startsWith('purchase_service_')) {
+      const store = await getStoreData();
+      const service = i.values[0];
+      const products = store.services[service] || [];
       
-      await sendLog('🎫 New Ticket', `<@${i.user.id}> opened a new ticket.`, 0x00ff88, [
-        { name: 'Category', value: cat.name, inline: true },
-        { name: 'Channel', value: `<#${ticketChannel.id}>`, inline: true }
-      ]);
+      if (products.length === 0) {
+        return i.update({ content: '❌ Geen producten gevonden voor deze service.', components: [] });
+      }
 
-      await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
-    } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
-    return;
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId(`purchase_product_${service}`)
+        .setPlaceholder('Which sort product do you want to buy?')
+        .addOptions(products.map(p => ({ label: `${p} (${store.products[p]?.price || 'N/A'})`, value: p })));
+
+      return i.update({ content: 'Which sort product do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
+    if (i.customId.startsWith('purchase_product_')) {
+      const store = await getStoreData();
+      const product = i.values[0];
+      const price = store.products[product]?.price || 'N/A';
+
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId(`purchase_payment_${product}`)
+        .setPlaceholder('Select payment method')
+        .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key })));
+
+      return i.update({ content: `You chose **${product}** for **${price}**. Select your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
+    }
+
+    if (i.customId.startsWith('purchase_payment_')) {
+      const product = i.customId.replace('purchase_payment_', '');
+      const payment = i.values[0];
+      const store = await getStoreData();
+      const price = store.products[product]?.price || 'N/A';
+      const paymentName = PAYMENT_METHODS[payment];
+
+      // Maak het ticket klaar
+      const embed = new EmbedBuilder()
+        .setTitle('🛒 Purchase Details')
+        .setColor(0x00ff88)
+        .setThumbnail(LOGO)
+        .setDescription(`Thank you for your order, <@${i.user.id}>! Please wait for a staff member to assist you.`)
+        .addFields(
+          { name: 'Product', value: product, inline: true },
+          { name: 'Price', value: price, inline: true },
+          { name: 'Payment Method', value: paymentName, inline: true }
+        )
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      await i.channel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed] });
+      
+      await sendLog('🛒 Purchase Started', `<@${i.user.id}> started a purchase: **${product}** (${price}) via **${paymentName}**.`, 0x00ff88);
+      
+      return i.update({ content: '✅ Your purchase details have been sent to the staff!', components: [] });
+    }
+
+    if (i.customId === 'move_ticket_select') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      
+      if (!ticket) return i.editReply({ content: '❌ This is not an active ticket.' });
+
+      const newCategoryId = i.values[0];
+      const newCategoryName = ALLOWED_MOVE_CATEGORIES[newCategoryId];
+
+      try {
+        await i.channel.setParent(newCategoryId, { lockPermissions: false });
+        
+        let newCatKey = null;
+        for (const [key, cat] of Object.entries(TICKET_CATEGORIES)) {
+          if (cat.categoryId === newCategoryId) {
+            newCatKey = key;
+            break;
+          }
+        }
+
+        if (newCatKey) {
+          await updateTicketCategory(i.channelId, newCatKey);
+        }
+
+        await i.channel.send({ content: `📁 Ticket has been moved to **${newCategoryName}** by <@${i.user.id}>.` });
+        await sendLog('📁 Ticket Moved', `<@${i.user.id}> moved ticket **#${i.channel.name}** to **${newCategoryName}**.`, 0xf39c12, [
+          { name: 'From', value: ticket.categorie || 'Unknown', inline: true },
+          { name: 'To', value: newCategoryName, inline: true }
+        ]);
+        await i.editReply({ content: `✅ Moved to **${newCategoryName}**.` });
+      } catch (e) {
+        await i.editReply({ content: `❌ Error: ${e.message}` });
+      }
+      return;
+    }
+
+    if (i.customId === 'ticket_category_select') {
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      const choice = i.values[0];
+      const cat = TICKET_CATEGORIES[choice];
+      if (!cat) return i.editReply({ content: '❌ Unknown category.' });
+
+      try {
+        const guild = i.guild;
+        const existingTicket = Object.values(tickets).find(t => t.userId === i.user.id);
+        if (existingTicket) {
+          return i.editReply({ content: `❌ You already have an open ticket: <#${Object.keys(tickets).find(key => tickets[key] === existingTicket)}>` });
+        }
+
+        const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
+        const overwrites = [
+          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
+        ];
+        
+        overwrites.push({ id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] });
+
+        const ticketChannel = await guild.channels.create({
+          name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}`,
+        });
+
+        await addTicket(ticketChannel.id, i.user.id, choice);
+
+        const embed = new EmbedBuilder().setTitle(cat.name).setColor(cat.color).setDescription(`<@${i.user.id}> — Please describe your question below.`).setTimestamp();
+        const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+
+        await ticketChannel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
+        
+        await sendLog('🎫 New Ticket', `<@${i.user.id}> opened a new **${cat.name}** ticket.`, 0x00ff88, [
+          { name: 'Channel', value: `<#${ticketChannel.id}>`, inline: true }
+        ]);
+
+        // Als het een Purchase ticket is, start de flow
+        if (choice === 'purchase') {
+          const store = await getStoreData();
+          const sections = Object.keys(store.sections);
+          
+          if (sections.length > 0) {
+            const menu = new StringSelectMenuBuilder()
+              .setCustomId('purchase_section')
+              .setPlaceholder('Select a section')
+              .addOptions(sections.map(s => ({ label: s, value: s })));
+
+            await i.editReply({ 
+              content: 'Which section do you want to buy?', 
+              components: [new ActionRowBuilder().addComponents(menu)],
+              flags: MessageFlags.Ephemeral 
+            });
+          } else {
+            await i.editReply({ 
+              content: '✅ Ticket created! (No store sections configured yet, please wait for staff.)', 
+              flags: MessageFlags.Ephemeral 
+            });
+          }
+        } else {
+          await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>`, flags: MessageFlags.Ephemeral });
+        }
+
+      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+      return;
+    }
   }
 
   if (i.isButton()) {
@@ -836,8 +994,7 @@ client.on('interactionCreate', async (i) => {
           topic: `Not-Legit proof from ${i.user.tag}`,
         });
 
-        // Alleen de NOT_LEGIT_TAG_ROLE_ID krijgt toegang
-        await ticketChannel.permissionOverwrites.edit(NOT_LEGIT_TAG_ROLE_ID, {
+        await ticketChannel.permissionOverwrites.edit(MAIN_TAG_ROLE_ID, {
           ViewChannel: true, SendMessages: true, ReadMessageHistory: true, ManageMessages: true
         }).catch(() => {});
 
@@ -872,7 +1029,7 @@ client.on('interactionCreate', async (i) => {
         );
 
         await ticketChannel.send({
-          content: `<@${i.user.id}> <@&${NOT_LEGIT_TAG_ROLE_ID}>`, // Alleen deze tag
+          content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`,
           embeds: [promptEmbed],
           components: [reviewRow, closeRow],
         });
