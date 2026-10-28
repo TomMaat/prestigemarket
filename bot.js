@@ -39,7 +39,7 @@ const TICKET_TRANSCRIPT_CHANNEL_ID = '1564415332737884234';
 const VOUCH_CHANNEL_ID = '1564555149865656401';
 const STORE_PANEL_CHANNEL_ID = '1564761625104490607';
 const RECENT_PAYMENTS_CHANNEL_ID = '1564761373026681205';
-const EARNINGS_PANEL_CHANNEL_ID = '1564761453402263572'; // <-- Aangepast
+const EARNINGS_PANEL_CHANNEL_ID = '1564761453402263572';
 
 // Earnings Users
 const EARNER_1_ID = '1033753872927293520';
@@ -466,34 +466,29 @@ function buildEarningsEmbed(earnings) {
     .setTimestamp();
 }
 
-async function setupEarningsPanel() {
-  try {
-    const channel = await client.channels.fetch(EARNINGS_PANEL_CHANNEL_ID).catch(() => null);
-    if (!channel) return;
-
-    const fetched = await channel.messages.fetch({ limit: 50 });
-    for (const msg of fetched.filter(m => m.author.id === client.user.id && m.embeds[0]?.title === '💰 Total Earned (Profit)').values()) {
-      await msg.delete().catch(() => {});
-    }
-
-    const earnings = await getEarnings();
-    const embed = buildEarningsEmbed(earnings);
-    const newMsg = await channel.send({ embeds: [embed] });
-    await setEarningsMessageId(newMsg.id);
-    console.log('✅ Earnings panel placed');
-  } catch (e) { console.error('Earnings panel error:', e.message); }
-}
-
 async function updateEarningsPanel() {
   try {
     const channel = await client.channels.fetch(EARNINGS_PANEL_CHANNEL_ID).catch(() => null);
     if (!channel) return;
 
     const messageId = await getEarningsMessageId();
-    if (!messageId) return;
+    if (!messageId) {
+      const earnings = await getEarnings();
+      const embed = buildEarningsEmbed(earnings);
+      const newMsg = await channel.send({ embeds: [embed] });
+      await setEarningsMessageId(newMsg.id);
+      console.log('✅ Earnings panel created');
+      return;
+    }
 
     const msg = await channel.messages.fetch(messageId).catch(() => null);
-    if (!msg) return;
+    if (!msg) {
+       const earnings = await getEarnings();
+       const embed = buildEarningsEmbed(earnings);
+       const newMsg = await channel.send({ embeds: [embed] });
+       await setEarningsMessageId(newMsg.id);
+       return;
+    }
 
     const earnings = await getEarnings();
     const embed = buildEarningsEmbed(earnings);
@@ -695,7 +690,6 @@ const commands = [
   ] },
   { name: 'changepaymentmethod', description: 'Change the payment method for this ticket' },
   { name: 'delivered', description: 'Mark ticket as delivered, log payment, and add earnings' },
-  { name: 'setup_earnings', description: 'Place the earnings panel' },
   { name: 'resetearned', description: 'Reset all earnings to 0' },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
@@ -734,13 +728,6 @@ client.on('interactionCreate', async (i) => {
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       await setupStorePanel();
       return i.editReply({ content: '✅ Store panel placed!' });
-    }
-
-    if (name === 'setup_earnings') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      await setupEarningsPanel();
-      return i.editReply({ content: '✅ Earnings panel placed!' });
     }
 
     if (name === 'resetearned') {
@@ -1729,6 +1716,10 @@ client.once('ready', async () => {
 
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupStorePanel();
+
+  // Update earnings paneel automatisch bij opstarten
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  await updateEarningsPanel();
 });
 
 client.login(TOKEN);
