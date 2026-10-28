@@ -38,6 +38,12 @@ const LOG_CHANNEL_ID = '1555729409535774833';
 const TICKET_TRANSCRIPT_CHANNEL_ID = '1564415332737884234';
 const VOUCH_CHANNEL_ID = '1564555149865656401';
 const STORE_PANEL_CHANNEL_ID = '1564761625104490607';
+const RECENT_PAYMENTS_CHANNEL_ID = '1564761373026681205';
+const EARNINGS_PANEL_CHANNEL_ID = '1564761453402263572'; // <-- Aangepast
+
+// Earnings Users
+const EARNER_1_ID = '1033753872927293520';
+const EARNER_2_ID = '951548670493462578';
 
 // Roles
 const VERIFIED_ROLE_ID = '1564415134171013154';
@@ -146,6 +152,8 @@ async function readGist() {
       vouchCounter: 0,
       storeData: { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null },
       storePanelMessageId: null,
+      earnings: { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0 },
+      earningsMessageId: null,
     };
   }
 
@@ -160,6 +168,8 @@ async function readGist() {
     vouchCounter: parsed.vouchCounter || 0,
     storeData: parsed.storeData || { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null },
     storePanelMessageId: parsed.storePanelMessageId || null,
+    earnings: parsed.earnings || { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0 },
+    earningsMessageId: parsed.earningsMessageId || null,
   };
 }
 
@@ -226,6 +236,11 @@ async function saveStoreData(s) { const d = await readGist(); d.storeData = s; a
 async function getStorePanelMessageId() { const d = await readGist(); return d.storePanelMessageId; }
 async function setStorePanelMessageId(id) { const d = await readGist(); d.storePanelMessageId = id; await writeGist(d); }
 
+async function getEarnings() { const d = await readGist(); return d.earnings; }
+async function saveEarnings(e) { const d = await readGist(); d.earnings = e; await writeGist(d); }
+async function getEarningsMessageId() { const d = await readGist(); return d.earningsMessageId; }
+async function setEarningsMessageId(id) { const d = await readGist(); d.earningsMessageId = id; await writeGist(d); }
+
 // ===== HELPERS =====
 function isStaff(member) {
   return member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
@@ -244,6 +259,11 @@ function formatPrice(priceStr) {
     clean = `€${clean}`;
   }
   return clean;
+}
+
+function parsePrice(priceStr) {
+  if (!priceStr) return 0;
+  return parseFloat(priceStr.toString().replace('€', '').replace(',', '.').trim()) || 0;
 }
 
 async function sendLog(title, description, color = 0x5865f2, fields = []) {
@@ -432,6 +452,55 @@ async function setupVerify() {
   } catch (e) { console.error('Verify setup error:', e.message); }
 }
 
+// ===== EARNINGS SYSTEM =====
+function buildEarningsEmbed(earnings) {
+  const earned1 = earnings[EARNER_1_ID] || 0;
+  const earned2 = earnings[EARNER_2_ID] || 0;
+
+  return new EmbedBuilder()
+    .setTitle('💰 Total Earned (Profit)')
+    .setColor(0x00ff88)
+    .setDescription(`**Profit overview for our sellers:**\n\n<@${EARNER_1_ID}>: **€${earned1.toFixed(2)}**\n<@${EARNER_2_ID}>: **€${earned2.toFixed(2)}**`)
+    .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+    .setThumbnail(LOGO)
+    .setTimestamp();
+}
+
+async function setupEarningsPanel() {
+  try {
+    const channel = await client.channels.fetch(EARNINGS_PANEL_CHANNEL_ID).catch(() => null);
+    if (!channel) return;
+
+    const fetched = await channel.messages.fetch({ limit: 50 });
+    for (const msg of fetched.filter(m => m.author.id === client.user.id && m.embeds[0]?.title === '💰 Total Earned (Profit)').values()) {
+      await msg.delete().catch(() => {});
+    }
+
+    const earnings = await getEarnings();
+    const embed = buildEarningsEmbed(earnings);
+    const newMsg = await channel.send({ embeds: [embed] });
+    await setEarningsMessageId(newMsg.id);
+    console.log('✅ Earnings panel placed');
+  } catch (e) { console.error('Earnings panel error:', e.message); }
+}
+
+async function updateEarningsPanel() {
+  try {
+    const channel = await client.channels.fetch(EARNINGS_PANEL_CHANNEL_ID).catch(() => null);
+    if (!channel) return;
+
+    const messageId = await getEarningsMessageId();
+    if (!messageId) return;
+
+    const msg = await channel.messages.fetch(messageId).catch(() => null);
+    if (!msg) return;
+
+    const earnings = await getEarnings();
+    const embed = buildEarningsEmbed(earnings);
+    await msg.edit({ embeds: [embed] });
+  } catch (e) { console.error('Failed to update earnings panel:', e.message); }
+}
+
 // ===== STORE MANAGEMENT SYSTEM =====
 function buildStoreEmbed(store) {
   const embed = new EmbedBuilder()
@@ -465,8 +534,9 @@ function buildStoreEmbed(store) {
             const p = store.products[prod];
             const price = formatPrice(p?.price);
             const amount = p?.amount ? ` per ${p.amount}` : '';
+            const buyCost = p?.buyCost ? ` (Buy: €${p.buyCost})` : '';
 
-            sectionText += `      ↳ 💰 ${price}${amount}\n`;
+            sectionText += `      ↳ 💰 ${price}${amount}${buyCost}\n`;
           });
         }
       });
@@ -624,7 +694,9 @@ const commands = [
       { name: 'account_name', description: 'Bank account holder name for Bank Transfer', type: 3, required: false }
   ] },
   { name: 'changepaymentmethod', description: 'Change the payment method for this ticket' },
-  { name: 'delivered', description: 'Mark ticket as delivered and move to archive' },
+  { name: 'delivered', description: 'Mark ticket as delivered, log payment, and add earnings' },
+  { name: 'setup_earnings', description: 'Place the earnings panel' },
+  { name: 'resetearned', description: 'Reset all earnings to 0' },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'close', description: 'Close this ticket' },
@@ -651,7 +723,7 @@ client.on('interactionCreate', async (i) => {
     const name = i.commandName;
 
     // Payment Commands restricted to specific roles
-    if (name === 'payment' || name === 'delivered' || name === 'changepaymentmethod') {
+    if (name === 'payment' || name === 'delivered' || name === 'changepaymentmethod' || name === 'resetearned') {
       if (!isPaymentStaff(i.member)) {
         return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
       }
@@ -662,6 +734,21 @@ client.on('interactionCreate', async (i) => {
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       await setupStorePanel();
       return i.editReply({ content: '✅ Store panel placed!' });
+    }
+
+    if (name === 'setup_earnings') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      await setupEarningsPanel();
+      return i.editReply({ content: '✅ Earnings panel placed!' });
+    }
+
+    if (name === 'resetearned') {
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      const earnings = { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0 };
+      await saveEarnings(earnings);
+      await updateEarningsPanel();
+      return i.editReply({ content: '✅ Earnings reset to 0 for both users.' });
     }
 
     if (name === 'vouch') {
@@ -803,6 +890,39 @@ client.on('interactionCreate', async (i) => {
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       
       try {
+        const store = await getStoreData();
+        const prodData = store.products[ticket.product];
+        let profit = 0;
+
+        if (prodData && ticket.total) {
+          const totalPrice = parsePrice(ticket.total);
+          const buyCostPer = prodData.buyCost ? parsePrice(prodData.buyCost) : 0;
+          const quantity = ticket.quantity || 1;
+          profit = totalPrice - (buyCostPer * quantity);
+        }
+
+        // Add to earnings
+        if (profit !== 0) {
+          const earnings = await getEarnings();
+          if (i.user.id === EARNER_1_ID || i.user.id === EARNER_2_ID) {
+            earnings[i.user.id] = (earnings[i.user.id] || 0) + profit;
+            await saveEarnings(earnings);
+            await updateEarningsPanel();
+          }
+        }
+
+        // Log to Recent Payments
+        const recentChannel = await client.channels.fetch(RECENT_PAYMENTS_CHANNEL_ID).catch(() => null);
+        if (recentChannel) {
+          const paymentEmbed = new EmbedBuilder()
+            .setTitle('💸 Recent Payment')
+            .setColor(0x00ff88)
+            .setDescription(`**Delivered by:** <@${i.user.id}>\n**Customer:** <@${ticket.userId}>\n**Product:** ${ticket.product} (${ticket.quantity}x)\n**Total:** ${ticket.total}\n**Profit:** €${profit.toFixed(2)}`)
+            .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+            .setTimestamp();
+          await recentChannel.send({ embeds: [paymentEmbed] });
+        }
+
         await i.channel.setParent(ARCHIVE_CATEGORY_ID, { lockPermissions: false });
         
         const t = await getTickets();
@@ -934,26 +1054,30 @@ client.on('interactionCreate', async (i) => {
     if (i.customId.startsWith('modal_add_price_single_')) {
       const product = i.customId.replace('modal_add_price_single_', '');
       const price = i.fields.getTextInputValue('product_price');
+      const buyCost = i.fields.getTextInputValue('product_buy_cost');
       const store = await getStoreData();
       if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
       store.products[product].price = price;
       store.products[product].amount = '';
+      if (buyCost) store.products[product].buyCost = buyCost;
       await saveStoreData(store);
       await updateStorePanel();
-      return i.reply({ content: `✅ Single price for **${product}** set to **${formatPrice(price)}**.`, flags: MessageFlags.Ephemeral });
+      return i.reply({ content: `✅ Single price for **${product}** set to **${formatPrice(price)}**. Buy cost: €${buyCost || 0}.`, flags: MessageFlags.Ephemeral });
     }
 
     if (i.customId.startsWith('modal_add_price_amount_')) {
       const product = i.customId.replace('modal_add_price_amount_', '');
       const price = i.fields.getTextInputValue('product_price');
       const amount = i.fields.getTextInputValue('product_amount');
+      const buyCost = i.fields.getTextInputValue('product_buy_cost');
       const store = await getStoreData();
       if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
       store.products[product].price = price;
       store.products[product].amount = amount;
+      if (buyCost) store.products[product].buyCost = buyCost;
       await saveStoreData(store);
       await updateStorePanel();
-      return i.reply({ content: `✅ Price for **${product}** set to **${formatPrice(price)}** per **${amount}**.`, flags: MessageFlags.Ephemeral });
+      return i.reply({ content: `✅ Price for **${product}** set to **${formatPrice(price)}** per **${amount}**. Buy cost: €${buyCost || 0}.`, flags: MessageFlags.Ephemeral });
     }
 
     if (i.customId.startsWith('modal_purchase_amount_')) {
@@ -1072,15 +1196,17 @@ client.on('interactionCreate', async (i) => {
 
       if (choice === 'single') {
         const modal = new ModalBuilder().setCustomId(`modal_add_price_single_${product}`).setTitle('Add Single Price');
-        const input = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setRequired(true);
+        const input2 = new TextInputBuilder().setCustomId('product_buy_cost').setLabel('Buy Cost (e.g. 2 or 0,50)').setStyle(TextInputStyle.Short).setRequired(false);
+        modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
         return i.showModal(modal);
       }
 
       const modal = new ModalBuilder().setCustomId(`modal_add_price_amount_${product}`).setTitle('Add Price Per Amount');
       const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setRequired(true);
       const input2 = new TextInputBuilder().setCustomId('product_amount').setLabel('Amount (e.g. 1000)').setStyle(TextInputStyle.Short).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
+      const input3 = new TextInputBuilder().setCustomId('product_buy_cost').setLabel('Buy Cost (e.g. 2 or 0,50)').setStyle(TextInputStyle.Short).setRequired(false);
+      modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2), new ActionRowBuilder().addComponents(input3));
       return i.showModal(modal);
     }
 
@@ -1193,6 +1319,7 @@ client.on('interactionCreate', async (i) => {
       if (!store.products[product]) return i.update({ content: '❌ Product not found.', components: [] });
       store.products[product].price = 'N/A';
       store.products[product].amount = '';
+      delete store.products[product].buyCost;
       await saveStoreData(store);
       await updateStorePanel();
       return i.update({ content: `✅ Price for **${product}** removed.`, components: [] });
