@@ -422,27 +422,32 @@ function buildStoreEmbed(store) {
     return embed;
   }
 
+  const IND1 = '    ';
+  const IND2 = '        ';
+  const IND3 = '            ';
+  const IND4 = '                ';
+
   for (const [section, services] of Object.entries(store.sections)) {
     let sectionText = '';
 
     if (services.length === 0) {
-      sectionText = '└ *No services*';
+      sectionText += `${IND2}└ *No services*\n`;
     } else {
       services.forEach((service, sIndex) => {
         const isLastService = sIndex === services.length - 1;
         const serviceBranch = isLastService ? '└' : '├';
-        const serviceIndent = isLastService ? '  ' : '│ ';
+        const serviceIndent = isLastService ? IND2 : IND2 + '│ ';
 
-        sectionText += `${serviceBranch} **${service}**\n`;
+        sectionText += `${IND2}${serviceBranch} **${service}**\n`;
 
         const products = store.services[service] || [];
         if (products.length === 0) {
-          sectionText += `${serviceIndent}└ *No products*\n`;
+          sectionText += `${serviceIndent}${IND3}└ *No products*\n`;
         } else {
           products.forEach((prod, pIndex) => {
             const isLastProduct = pIndex === products.length - 1;
             const productBranch = isLastProduct ? '└' : '├';
-            const productIndent = isLastProduct ? '  ' : '│ ';
+            const productIndent = isLastProduct ? IND3 : IND3 + '│ ';
 
             sectionText += `${serviceIndent}${productBranch} ${prod}\n`;
 
@@ -805,8 +810,22 @@ client.on('interactionCreate', async (i) => {
       return i.reply({ content: `✅ Product **${name}** added to **${service}**.`, flags: MessageFlags.Ephemeral });
     }
 
-    if (i.customId.startsWith('modal_add_price_')) {
-      const product = i.customId.replace('modal_add_price_', '');
+    // Single price (no amount)
+    if (i.customId.startsWith('modal_add_price_single_')) {
+      const product = i.customId.replace('modal_add_price_single_', '');
+      const price = i.fields.getTextInputValue('product_price');
+      const store = await getStoreData();
+      if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
+      store.products[product].price = price;
+      store.products[product].amount = '';
+      await saveStoreData(store);
+      await updateStorePanel();
+      return i.reply({ content: `✅ Single price for **${product}** set to **${price}**.`, flags: MessageFlags.Ephemeral });
+    }
+
+    // Price per amount
+    if (i.customId.startsWith('modal_add_price_amount_')) {
+      const product = i.customId.replace('modal_add_price_amount_', '');
       const price = i.fields.getTextInputValue('product_price');
       const amount = i.fields.getTextInputValue('product_amount');
       const store = await getStoreData();
@@ -834,7 +853,7 @@ client.on('interactionCreate', async (i) => {
       }
 
       const pricePer = parseFloat(prodData.price.replace('€', '').trim());
-      const amountPer = parseInt(prodData.amount);
+      const amountPer = prodData.amount ? parseInt(prodData.amount) : 1;
       const total = ((pricePer / amountPer) * quantity).toFixed(2);
 
       const data = pendingPurchases.get(i.user.id);
@@ -914,6 +933,25 @@ client.on('interactionCreate', async (i) => {
       return;
     }
 
+    // ===== SINGLE PRICE CHOICE (from Add Price flow) =====
+    if (i.customId.startsWith('select_price_type_')) {
+      const product = i.customId.replace('select_price_type_', '');
+      const choice = i.values[0];
+
+      if (choice === 'single') {
+        const modal = new ModalBuilder().setCustomId(`modal_add_price_single_${product}`).setTitle('Add Single Price');
+        const input = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. €5.00)').setStyle(TextInputStyle.Short).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return i.showModal(modal);
+      }
+
+      const modal = new ModalBuilder().setCustomId(`modal_add_price_amount_${product}`).setTitle('Add Price Per Amount');
+      const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. €5.00)').setStyle(TextInputStyle.Short).setRequired(true);
+      const input2 = new TextInputBuilder().setCustomId('product_amount').setLabel('Amount (e.g. 1000)').setStyle(TextInputStyle.Short).setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
+      return i.showModal(modal);
+    }
+
     // ===== REMOVE FLOW =====
     if (i.customId === 'store_remove_type') {
       const type = i.values[0];
@@ -966,7 +1004,6 @@ client.on('interactionCreate', async (i) => {
       const store = await getStoreData();
       const services = store.sections[section] || [];
 
-      // Remove services + products that belong only to this section
       for (const service of services) {
         const stillUsed = Object.entries(store.sections).some(([s, list]) => s !== section && list.includes(service));
         if (!stillUsed) {
@@ -1049,11 +1086,14 @@ client.on('interactionCreate', async (i) => {
 
     if (i.customId === 'select_product_for_price') {
       const product = i.values[0];
-      const modal = new ModalBuilder().setCustomId(`modal_add_price_${product}`).setTitle('Add Price');
-      const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. €5.00)').setStyle(TextInputStyle.Short).setRequired(true);
-      const input2 = new TextInputBuilder().setCustomId('product_amount').setLabel('Amount (e.g. 1000)').setStyle(TextInputStyle.Short).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
-      return i.showModal(modal);
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId(`select_price_type_${product}`)
+        .setPlaceholder('Is this a single price?')
+        .addOptions([
+          { label: 'Yes — single price', value: 'single', emoji: '✅' },
+          { label: 'No — price per amount', value: 'per_amount', emoji: '➗' },
+        ]);
+      return i.update({ content: `💰 Is **${product}** a single price or a price per amount?`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
     if (i.customId === 'purchase_section') {
@@ -1087,7 +1127,11 @@ client.on('interactionCreate', async (i) => {
       const menu = new StringSelectMenuBuilder()
         .setCustomId('purchase_product')
         .setPlaceholder('Which product do you want to buy?')
-        .addOptions(products.map(p => ({ label: `${p} (${store.products[p]?.price || 'N/A'} per ${store.products[p]?.amount || 'N/A'})`, value: p })));
+        .addOptions(products.map(p => {
+          const pd = store.products[p];
+          const priceLabel = pd?.amount ? `${pd.price || 'N/A'} per ${pd.amount}` : (pd?.price || 'N/A');
+          return { label: `${p} (${priceLabel})`, value: p };
+        }));
 
       return i.update({ content: 'Which product do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
     }
@@ -1100,12 +1144,14 @@ client.on('interactionCreate', async (i) => {
       const store = await getStoreData();
       const prod = store.products[data.product];
 
-      if (!prod || prod.price === 'N/A' || !prod.amount) {
-        return i.update({ content: '❌ Price or amount not set for this product.', components: [] });
+      if (!prod || prod.price === 'N/A') {
+        return i.update({ content: '❌ Price not set for this product.', components: [] });
       }
 
+      const amountLabel = prod.amount ? ` per ${prod.amount}` : '';
+
       const modal = new ModalBuilder().setCustomId(`modal_purchase_amount_${data.product}`).setTitle('Enter Quantity');
-      const input = new TextInputBuilder().setCustomId('quantity').setLabel(`How many? (Price: ${prod.price} per ${prod.amount})`).setStyle(TextInputStyle.Short).setRequired(true);
+      const input = new TextInputBuilder().setCustomId('quantity').setLabel(`How many? (Price: ${prod.price}${amountLabel})`).setStyle(TextInputStyle.Short).setRequired(true);
       modal.addComponents(new ActionRowBuilder().addComponents(input));
       return i.showModal(modal);
     }
