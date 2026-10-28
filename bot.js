@@ -40,13 +40,13 @@ const VOUCH_CHANNEL_ID = '1564555149865656401';
 const STORE_PANEL_CHANNEL_ID = '1564761625104490607';
 const RECENT_PAYMENTS_CHANNEL_ID = '1564761373026681205';
 const EARNINGS_PANEL_CHANNEL_ID = '1564761453402263572';
+const PAYMENT_METHODS_CHANNEL_ID = '1564552449585586186';
 
-// Earnings Users (DEGENE DIE /payment, /delivered en /giveproduct MOGEN DOEN)
+// Earnings Users
 const EARNER_1_ID = '710623438657683486';
 const EARNER_2_ID = '755111368839135367';
 const EARNER_3_ID = '1033753872927293520';
 const EARNER_4_ID = '951548670493462578';
-
 const PAYMENT_COMMAND_ALLOWED_IDS = [EARNER_1_ID, EARNER_2_ID, EARNER_3_ID, EARNER_4_ID];
 
 // Roles
@@ -59,7 +59,6 @@ const STAFF_ROLE_IDS = [
   '1564415129955729418',
   MAIN_TAG_ROLE_ID
 ];
-
 const CLEAR_PRODUCTS_ROLE_ID = '1564415129955729418';
 
 // Categories
@@ -150,10 +149,11 @@ async function readGist() {
       notlegitTickets: {},
       confirmedRejects: [],
       vouchCounter: 0,
-      storeData: { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null },
+      storeData: { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null, serviceChannels: {}, serviceMessages: {} },
       storePanelMessageId: null,
       earnings: { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 },
       earningsMessageId: null,
+      paymentMethodsMessageId: null,
     };
   }
 
@@ -166,10 +166,11 @@ async function readGist() {
     notlegitTickets: parsed.notlegitTickets || {},
     confirmedRejects: parsed.confirmedRejects || [],
     vouchCounter: parsed.vouchCounter || 0,
-    storeData: parsed.storeData || { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null },
+    storeData: parsed.storeData || { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null, serviceChannels: {}, serviceMessages: {} },
     storePanelMessageId: parsed.storePanelMessageId || null,
     earnings: parsed.earnings || { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 },
     earningsMessageId: parsed.earningsMessageId || null,
+    paymentMethodsMessageId: parsed.paymentMethodsMessageId || null,
   };
 }
 
@@ -240,6 +241,9 @@ async function getEarnings() { const d = await readGist(); return d.earnings; }
 async function saveEarnings(e) { const d = await readGist(); d.earnings = e; await writeGist(d); }
 async function getEarningsMessageId() { const d = await readGist(); return d.earningsMessageId; }
 async function setEarningsMessageId(id) { const d = await readGist(); d.earningsMessageId = id; await writeGist(d); }
+
+async function getPaymentMethodsMessageId() { const d = await readGist(); return d.paymentMethodsMessageId; }
+async function setPaymentMethodsMessageId(id) { const d = await readGist(); d.paymentMethodsMessageId = id; await writeGist(d); }
 
 // ===== HELPERS =====
 function isStaff(member) {
@@ -500,6 +504,39 @@ async function updateEarningsPanel() {
   } catch (e) { console.error('Failed to update earnings panel:', e.message); }
 }
 
+// ===== PAYMENT METHODS EMBED =====
+async function setupPaymentMethods() {
+  try {
+    const channel = await client.channels.fetch(PAYMENT_METHODS_CHANNEL_ID).catch(() => null);
+    if (!channel) return console.error(`❌ Payment methods channel (${PAYMENT_METHODS_CHANNEL_ID}) not found.`);
+
+    const embed = new EmbedBuilder()
+      .setTitle('## Payment Methods')
+      .setDescription(
+        `<:arrowrightalt:1564725822772879473>   <:ideal:1564724669129560174>  **(Ideal)**\n` +
+        `<:arrowrightalt:1564725822772879473>  <:paypal:1564726369219510354> **(paypal)**\n` +
+        `<:arrowrightalt:1564725822772879473>  <:ltc:1564724536979759124>  **(Cryptocurrencies, LTC) = 10% Off!**\n` +
+        `<:arrowrightalt:1564725822772879473>  <:bank:1564724257164886078>  **(Bank transfer)**\n\n` +
+        `-# Please share your suggestions for new payment methods we can add.`
+      )
+      .setColor(0x2b2b2b);
+
+    const messageId = await getPaymentMethodsMessageId();
+    if (messageId) {
+      const msg = await channel.messages.fetch(messageId).catch(() => null);
+      if (msg) {
+        await msg.edit({ embeds: [embed] });
+        console.log('✅ Payment methods updated');
+        return;
+      }
+    }
+
+    const newMsg = await channel.send({ embeds: [embed] });
+    await setPaymentMethodsMessageId(newMsg.id);
+    console.log('✅ Payment methods placed');
+  } catch (e) { console.error('Payment methods error:', e.message); }
+}
+
 // ===== STORE MANAGEMENT SYSTEM =====
 function buildStoreEmbed(store) {
   const embed = new EmbedBuilder()
@@ -535,7 +572,6 @@ function buildStoreEmbed(store) {
             const amount = p?.amount ? ` per ${p.amount}` : '';
             const buyCost = p?.buyCost ? ` (Buy: €${p.buyCost})` : '';
 
-            // HIER IS DE ENTER TOEGEVOEGD (extra \n)
             sectionText += `      ↳ 💰 ${price}${amount}${buyCost}\n\n`;
           });
         }
@@ -592,6 +628,51 @@ async function updateStorePanel() {
     const embed = buildStoreEmbed(store);
     await msg.edit({ embeds: [embed], components: [buildStoreRow()] });
   } catch (e) { console.error('Failed to update store panel:', e.message); }
+}
+
+// ===== SERVICE SHOP EMBED =====
+async function updateServiceShop(serviceName) {
+  try {
+    const store = await getStoreData();
+    const channelId = store.serviceChannels?.[serviceName];
+    if (!channelId) return;
+
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel) return;
+
+    const products = store.services[serviceName] || [];
+    const productLines = products.length > 0 ? products.map(p => `> ${p}`).join('\n') : '*No products available yet.*';
+
+    const embed = new EmbedBuilder()
+      .setTitle(`# Prestige ${serviceName} Shop`)
+      .setColor(0x2b2b2b)
+      .setDescription(
+        `${productLines}\n\n` +
+        `**HOW TO ORDER**\n` +
+        `- Open a ticket\n` +
+        `- Choose your preferred service\n` +
+        `- Ask for prices and availability\n` +
+        `- Complete your purchase\n\n` +
+        `# 𝙋𝙍𝙀𝙎𝙏𝙄𝙂𝙀\n` +
+        `*Your entertainment, your choice.*`
+      )
+      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+      .setTimestamp();
+
+    const existingMsgId = store.serviceMessages?.[serviceName];
+    if (existingMsgId) {
+      const msg = await channel.messages.fetch(existingMsgId).catch(() => null);
+      if (msg) {
+        await msg.edit({ embeds: [embed] });
+        return;
+      }
+    }
+
+    const newMsg = await channel.send({ embeds: [embed] });
+    if (!store.serviceMessages) store.serviceMessages = {};
+    store.serviceMessages[serviceName] = newMsg.id;
+    await saveStoreData(store);
+  } catch (e) { console.error('Failed to update service shop:', e.message); }
 }
 
 // ===== TICKET SYSTEM =====
@@ -742,7 +823,7 @@ client.on('interactionCreate', async (i) => {
         return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
       }
       await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const emptyStore = { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null };
+      const emptyStore = { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null, serviceChannels: {}, serviceMessages: {} };
       await saveStoreData(emptyStore);
       await updateStorePanel();
       return i.editReply({ content: '✅ All products, services, and sections have been cleared!' });
@@ -1088,7 +1169,19 @@ client.on('interactionCreate', async (i) => {
       store.lastService = name;
       await saveStoreData(store);
       await updateStorePanel();
-      return i.reply({ content: `✅ Service **${name}** added to **${section}**.`, flags: MessageFlags.Ephemeral });
+      
+      // Direct vraag voor kanaal
+      const channels = i.guild.channels.cache.filter(c => c.type === ChannelType.GuildText && c.id !== STORE_PANEL_CHANNEL_ID);
+      if (channels.size === 0) {
+        return i.reply({ content: `✅ Service **${name}** added to **${section}**. (No text channels found to link.)`, flags: MessageFlags.Ephemeral });
+      }
+
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId(`link_channel_to_service_${name}`)
+        .setPlaceholder('Select a channel for this service shop')
+        .addOptions(channels.first(25).map(c => ({ label: c.name, value: c.id })));
+
+      return i.reply({ content: `✅ Service **${name}** added to **${section}**.\n\nWould you like to link a text channel to this service for a shop embed?`, components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
     }
 
     if (i.customId.startsWith('modal_add_product_')) {
@@ -1101,6 +1194,12 @@ client.on('interactionCreate', async (i) => {
       store.lastProduct = name;
       await saveStoreData(store);
       await updateStorePanel();
+      
+      // Update kanaal embed als er een kanaal is
+      if (store.serviceChannels?.[service]) {
+        await updateServiceShop(service);
+      }
+      
       return i.reply({ content: `✅ Product **${name}** added to **${service}**.`, flags: MessageFlags.Ephemeral });
     }
 
@@ -1172,6 +1271,20 @@ client.on('interactionCreate', async (i) => {
 
   if (i.isStringSelectMenu()) {
     const userId = i.user.id;
+
+    if (i.customId.startsWith('link_channel_to_service_')) {
+      const serviceName = i.customId.replace('link_channel_to_service_', '');
+      const channelId = i.values[0];
+      
+      const store = await getStoreData();
+      if (!store.serviceChannels) store.serviceChannels = {};
+      store.serviceChannels[serviceName] = channelId;
+      await saveStoreData(store);
+      
+      await updateServiceShop(serviceName);
+      
+      return i.update({ content: `✅ Service **${serviceName}** is now linked to <#${channelId}> and the shop embed has been placed!`, components: [] });
+    }
 
     if (i.customId === 'ticket_category_select') {
       await i.deferReply({ flags: MessageFlags.Ephemeral });
@@ -1783,7 +1896,9 @@ client.once('ready', async () => {
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupStorePanel();
 
-  // Update earnings paneel automatisch bij opstarten
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  await setupPaymentMethods();
+
   await new Promise(resolve => setTimeout(resolve, 3000));
   await updateEarningsPanel();
 });
