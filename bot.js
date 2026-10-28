@@ -498,18 +498,18 @@ async function closeTicket(channel, closerId) {
 
 // ===== COMMANDS =====
 const commands = [
-  { 
-    name: 'vouch', 
-    description: 'Leave a vouch',
-    options: [
+  { name: 'vouch', description: 'Leave a vouch', options: [
       { name: 'product', description: 'What did you buy?', type: 3, required: true },
       { name: 'extra', description: 'Extra information', type: 3, required: true }
-    ]
-  },
-  { name: 'addsection', description: 'Add a new section to the store', options: [{ name: 'name', description: 'Section name', type: 3, required: true }] },
+  ] },
+  { name: 'addsection', description: 'Add a new section', options: [{ name: 'name', description: 'Section name', type: 3, required: true }] },
+  { name: 'removesection', description: 'Remove a section', options: [{ name: 'name', description: 'Section name', type: 3, required: true }] },
   { name: 'addservice', description: 'Add a service to a section', options: [{ name: 'section', description: 'Section name', type: 3, required: true }, { name: 'name', description: 'Service name', type: 3, required: true }] },
+  { name: 'removeservice', description: 'Remove a service from a section', options: [{ name: 'section', description: 'Section name', type: 3, required: true }, { name: 'name', description: 'Service name', type: 3, required: true }] },
   { name: 'addproduct', description: 'Add a product to a service', options: [{ name: 'service', description: 'Service name', type: 3, required: true }, { name: 'name', description: 'Product name', type: 3, required: true }] },
-  { name: 'addprice', description: 'Set the price of a product', options: [{ name: 'product', description: 'Product name', type: 3, required: true }, { name: 'price', description: 'Price (e.g. €5.00)', type: 3, required: true }] },
+  { name: 'removeproduct', description: 'Remove a product from a service', options: [{ name: 'service', description: 'Service name', type: 3, required: true }, { name: 'name', description: 'Product name', type: 3, required: true }] },
+  { name: 'addprice', description: 'Set the price of a product', options: [{ name: 'product', description: 'Product name', type: 3, required: true }, { name: 'price', description: 'Price', type: 3, required: true }] },
+  { name: 'removeprice', description: 'Remove the price of a product', options: [{ name: 'product', description: 'Product name', type: 3, required: true }] },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'close', description: 'Close this ticket' },
@@ -517,7 +517,7 @@ const commands = [
   { name: 'move', description: 'Move this ticket to another category' },
   { name: 'ticketpanel', description: 'Place the ticket panel' },
   { name: 'refreshverify', description: 'Refresh the verify message' },
-  { name: 'removekruis', description: 'Remove ❌ votes from the legit poll', options: [{ name: 'amount', description: 'How many crosses to remove?', type: 4, required: true, min_value: 1 }] }
+  { name: 'removekruis', description: 'Remove ❌ votes from the legit poll', options: [{ name: 'amount', description: 'How many?', type: 4, required: true, min_value: 1 }] }
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -583,45 +583,68 @@ client.on('interactionCreate', async (i) => {
       }
     }
 
-    if (name === 'addsection' || name === 'addservice' || name === 'addproduct' || name === 'addprice') {
+    if (name.includes('add') || name.includes('remove')) {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
       
       const store = await getStoreData();
-      
+      const secName = i.options.getString('section');
+      const servName = i.options.getString('service') || i.options.getString('name');
+      const prodName = i.options.getString('product');
+      const price = i.options.getString('price');
+
       if (name === 'addsection') {
-        const secName = i.options.getString('name');
-        if (!store.sections[secName]) store.sections[secName] = [];
+        const n = i.options.getString('name');
+        if (!store.sections[n]) store.sections[n] = [];
         await saveStoreData(store);
-        return i.reply({ content: `✅ Section **${secName}** added.`, flags: MessageFlags.Ephemeral });
+        return i.reply({ content: `✅ Section **${n}** added.`, flags: MessageFlags.Ephemeral });
       }
-      
+      if (name === 'removesection') {
+        const n = i.options.getString('name');
+        delete store.sections[n];
+        await saveStoreData(store);
+        return i.reply({ content: `✅ Section **${n}** removed.`, flags: MessageFlags.Ephemeral });
+      }
       if (name === 'addservice') {
-        const secName = i.options.getString('section');
-        const servName = i.options.getString('name');
         if (!store.sections[secName]) return i.reply({ content: `❌ Section **${secName}** does not exist.`, flags: MessageFlags.Ephemeral });
         if (!store.sections[secName].includes(servName)) store.sections[secName].push(servName);
         if (!store.services[servName]) store.services[servName] = [];
         await saveStoreData(store);
         return i.reply({ content: `✅ Service **${servName}** added to **${secName}**.`, flags: MessageFlags.Ephemeral });
       }
-      
+      if (name === 'removeservice') {
+        if (store.sections[secName]) {
+          store.sections[secName] = store.sections[secName].filter(s => s !== servName);
+        }
+        delete store.services[servName];
+        await saveStoreData(store);
+        return i.reply({ content: `✅ Service **${servName}** removed.`, flags: MessageFlags.Ephemeral });
+      }
       if (name === 'addproduct') {
-        const servName = i.options.getString('service');
-        const prodName = i.options.getString('name');
         if (!store.services[servName]) return i.reply({ content: `❌ Service **${servName}** does not exist.`, flags: MessageFlags.Ephemeral });
         if (!store.services[servName].includes(prodName)) store.services[servName].push(prodName);
         if (!store.products[prodName]) store.products[prodName] = { price: 'N/A' };
         await saveStoreData(store);
         return i.reply({ content: `✅ Product **${prodName}** added to **${servName}**.`, flags: MessageFlags.Ephemeral });
       }
-      
+      if (name === 'removeproduct') {
+        if (store.services[servName]) {
+          store.services[servName] = store.services[servName].filter(p => p !== prodName);
+        }
+        delete store.products[prodName];
+        await saveStoreData(store);
+        return i.reply({ content: `✅ Product **${prodName}** removed.`, flags: MessageFlags.Ephemeral });
+      }
       if (name === 'addprice') {
-        const prodName = i.options.getString('product');
-        const price = i.options.getString('price');
         if (!store.products[prodName]) return i.reply({ content: `❌ Product **${prodName}** does not exist.`, flags: MessageFlags.Ephemeral });
         store.products[prodName].price = price;
         await saveStoreData(store);
         return i.reply({ content: `✅ Price for **${prodName}** set to **${price}**.`, flags: MessageFlags.Ephemeral });
+      }
+      if (name === 'removeprice') {
+        if (!store.products[prodName]) return i.reply({ content: `❌ Product **${prodName}** does not exist.`, flags: MessageFlags.Ephemeral });
+        store.products[prodName].price = 'N/A';
+        await saveStoreData(store);
+        return i.reply({ content: `✅ Price for **${prodName}** removed.`, flags: MessageFlags.Ephemeral });
       }
     }
 
@@ -787,7 +810,6 @@ client.on('interactionCreate', async (i) => {
       const price = store.products[product]?.price || 'N/A';
       const paymentName = PAYMENT_METHODS[payment];
 
-      // Maak het ticket klaar
       const embed = new EmbedBuilder()
         .setTitle('🛒 Purchase Details')
         .setColor(0x00ff88)
@@ -802,7 +824,6 @@ client.on('interactionCreate', async (i) => {
         .setTimestamp();
 
       await i.channel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed] });
-      
       await sendLog('🛒 Purchase Started', `<@${i.user.id}> started a purchase: **${product}** (${price}) via **${paymentName}**.`, 0x00ff88);
       
       return i.update({ content: '✅ Your purchase details have been sent to the staff!', components: [] });
@@ -810,9 +831,7 @@ client.on('interactionCreate', async (i) => {
 
     if (i.customId === 'move_ticket_select') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      
       await i.deferReply({ flags: MessageFlags.Ephemeral });
-      
       if (!ticket) return i.editReply({ content: '❌ This is not an active ticket.' });
 
       const newCategoryId = i.values[0];
@@ -820,28 +839,16 @@ client.on('interactionCreate', async (i) => {
 
       try {
         await i.channel.setParent(newCategoryId, { lockPermissions: false });
-        
         let newCatKey = null;
         for (const [key, cat] of Object.entries(TICKET_CATEGORIES)) {
-          if (cat.categoryId === newCategoryId) {
-            newCatKey = key;
-            break;
-          }
+          if (cat.categoryId === newCategoryId) { newCatKey = key; break; }
         }
-
-        if (newCatKey) {
-          await updateTicketCategory(i.channelId, newCatKey);
-        }
+        if (newCatKey) await updateTicketCategory(i.channelId, newCatKey);
 
         await i.channel.send({ content: `📁 Ticket has been moved to **${newCategoryName}** by <@${i.user.id}>.` });
-        await sendLog('📁 Ticket Moved', `<@${i.user.id}> moved ticket **#${i.channel.name}** to **${newCategoryName}**.`, 0xf39c12, [
-          { name: 'From', value: ticket.categorie || 'Unknown', inline: true },
-          { name: 'To', value: newCategoryName, inline: true }
-        ]);
+        await sendLog('📁 Ticket Moved', `<@${i.user.id}> moved ticket **#${i.channel.name}** to **${newCategoryName}**.`, 0xf39c12);
         await i.editReply({ content: `✅ Moved to **${newCategoryName}**.` });
-      } catch (e) {
-        await i.editReply({ content: `❌ Error: ${e.message}` });
-      }
+      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
       return;
     }
 
@@ -855,17 +862,16 @@ client.on('interactionCreate', async (i) => {
         const guild = i.guild;
         const existingTicket = Object.values(tickets).find(t => t.userId === i.user.id);
         if (existingTicket) {
-          return i.editReply({ content: `❌ You already have an open ticket: <#${Object.keys(tickets).find(key => tickets[key] === existingTicket)}>` });
+          return i.editReply({ content: `❌ You already have an open ticket.` });
         }
 
         const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
         const overwrites = [
           { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
           { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
-          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+          { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
         ];
-        
-        overwrites.push({ id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] });
 
         const ticketChannel = await guild.channels.create({
           name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}`,
@@ -882,7 +888,6 @@ client.on('interactionCreate', async (i) => {
           { name: 'Channel', value: `<#${ticketChannel.id}>`, inline: true }
         ]);
 
-        // Als het een Purchase ticket is, start de flow
         if (choice === 'purchase') {
           const store = await getStoreData();
           const sections = Object.keys(store.sections);
@@ -893,20 +898,15 @@ client.on('interactionCreate', async (i) => {
               .setPlaceholder('Select a section')
               .addOptions(sections.map(s => ({ label: s, value: s })));
 
-            await i.editReply({ 
-              content: 'Which section do you want to buy?', 
+            // BELANGRIJK: Geen ephemeral flag hier, zodat het in het kanaal staat!
+            await ticketChannel.send({ 
+              content: `<@${i.user.id}> Which section do you want to buy?`, 
               components: [new ActionRowBuilder().addComponents(menu)],
-              flags: MessageFlags.Ephemeral 
-            });
-          } else {
-            await i.editReply({ 
-              content: '✅ Ticket created! (No store sections configured yet, please wait for staff.)', 
-              flags: MessageFlags.Ephemeral 
             });
           }
-        } else {
-          await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>`, flags: MessageFlags.Ephemeral });
         }
+
+        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
 
       } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
       return;
@@ -920,15 +920,8 @@ client.on('interactionCreate', async (i) => {
       try {
         await i.member.roles.add(VERIFIED_ROLE_ID);
         await i.reply({ content: '✅ You have accepted the rules and are now verified!', flags: MessageFlags.Ephemeral });
-        
         await updateVerifyMessage();
-
-        const verifiedRole = i.guild.roles.cache.get(VERIFIED_ROLE_ID);
-        const currentCount = verifiedRole ? verifiedRole.members.size : 0;
-
-        await sendLog('✅ User Verified', `<@${i.user.id}> accepted the rules.`, 0x00ff88, [
-          { name: 'Total verified', value: `${currentCount}`, inline: true }
-        ]);
+        await sendLog('✅ User Verified', `<@${i.user.id}> accepted the rules.`, 0x00ff88);
       } catch (e) { await i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
       return;
     }
@@ -941,131 +934,74 @@ client.on('interactionCreate', async (i) => {
         votes.approve = votes.approve.filter(id => id !== userId);
         votes.reject = votes.reject.filter(id => id !== userId);
         votes.approve.push(userId);
-        
         const confirmed = await getConfirmedRejects();
         const newConfirmed = confirmed.filter(id => id !== userId);
         if (newConfirmed.length !== confirmed.length) await saveConfirmedRejects(newConfirmed);
-        
         await saveLegitVotes(votes);
         await setupLegit();
-
-        await sendLog('🗳️ Legit Vote', `<@${i.user.id}> voted: **Legit (✅)**`, 0x5865f2, [
-          { name: 'Total ✅', value: `${votes.approve.length}`, inline: true }
-        ]);
-
-        try {
-          await i.user.send({ content: `✅ Your vote has been saved as **Legit** in Prestige Market.` });
-        } catch (err) {}
-
+        await sendLog('🗳️ Legit Vote', `<@${i.user.id}> voted: **Legit (✅)**`, 0x5865f2);
+        try { await i.user.send({ content: `✅ Your vote has been saved as **Legit** in Prestige Market.` }); } catch (err) {}
         await i.reply({ content: '✅ Your vote has been saved as **Legit**.', flags: MessageFlags.Ephemeral });
       } catch (e) { await i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
       return;
     }
 
-    // LEGIT REJECT (AUTO TICKET)
+    // LEGIT REJECT
     if (i.customId === 'legit_reject') {
       try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const tickets = await getTickets();
-
-        const existingNotLegit = Object.entries(tickets).find(
-          ([_, t]) => t.userId === i.user.id && t.categorie === 'notlegit'
-        );
-        if (existingNotLegit) {
-          return i.reply({
-            content: `❌ You already have an open proof ticket: <#${existingNotLegit[0]}>. Upload your proof there.`,
-            flags: MessageFlags.Ephemeral,
-          });
-        }
+        const existingNotLegit = Object.entries(tickets).find(([_, t]) => t.userId === i.user.id && t.categorie === 'notlegit');
+        if (existingNotLegit) return i.reply({ content: `❌ You already have an open proof ticket: <#${existingNotLegit[0]}>.`, flags: MessageFlags.Ephemeral });
 
         await i.deferReply({ flags: MessageFlags.Ephemeral });
 
         const cat = TICKET_CATEGORIES.notlegit;
         const channelName = `notlegit-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
         const ticketChannel = await guild.channels.create({
-          name: channelName,
-          type: ChannelType.GuildText,
-          parent: NOT_LEGIT_TICKET_CATEGORY_ID,
+          name: channelName, type: ChannelType.GuildText, parent: NOT_LEGIT_TICKET_CATEGORY_ID,
           permissionOverwrites: [
             { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
             { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
             { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory] },
+            { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
           ],
           topic: `Not-Legit proof from ${i.user.tag}`,
         });
 
-        await ticketChannel.permissionOverwrites.edit(MAIN_TAG_ROLE_ID, {
-          ViewChannel: true, SendMessages: true, ReadMessageHistory: true, ManageMessages: true
-        }).catch(() => {});
-
         await addTicket(ticketChannel.id, i.user.id, 'notlegit');
-
         const notLegitStore = await getNotLegitTickets();
-        notLegitStore[ticketChannel.id] = {
-          userId: i.user.id,
-          status: 'pending',
-          createdAt: Date.now(),
-        };
+        notLegitStore[ticketChannel.id] = { userId: i.user.id, status: 'pending', createdAt: Date.now() };
         await saveNotLegitTickets(notLegitStore);
 
-        const promptEmbed = new EmbedBuilder()
-          .setTitle('Upload proof')
-          .setColor(0xff4444)
-          .setThumbnail(LOGO)
-          .setDescription(
-            `Please upload your proof here (screenshots, video, files).\n\n` +
-            `Staff will review it and click **Positive** or **False**.`
-          )
-          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
-          .setTimestamp();
+        const promptEmbed = new EmbedBuilder().setTitle('Upload proof').setColor(0xff4444).setThumbnail(LOGO)
+          .setDescription(`Please upload your proof here (screenshots, video, files).\n\nStaff will review it and click **Positive** or **False**.`)
+          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
 
-        const closeRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger)
-        );
-
+        const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
         const reviewRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('notlegit_positive').setLabel('Positive').setEmoji('✅').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId('notlegit_false').setLabel('False').setEmoji('❌').setStyle(ButtonStyle.Danger)
         );
 
-        await ticketChannel.send({
-          content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`,
-          embeds: [promptEmbed],
-          components: [reviewRow, closeRow],
-        });
-
-        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}> — upload your proof there.` });
-
-        try {
-          await i.user.send({ content: `❌ Your vote has been saved as **Not Legit**. Please upload your proof in the ticket that was just created for you.` });
-        } catch (err) {}
-
-      } catch (e) {
-        console.error('legit_reject error:', e);
-        try { await i.editReply({ content: `❌ Error: ${e.message}` }); } catch (_) {}
-      }
+        await ticketChannel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [promptEmbed], components: [reviewRow, closeRow] });
+        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
+        try { await i.user.send({ content: `❌ Your vote has been saved as **Not Legit**. Please upload your proof in the ticket that was just created for you.` }); } catch (err) {}
+      } catch (e) { console.error(e); try { await i.editReply({ content: `❌ Error: ${e.message}` }); } catch (_) {} }
       return;
     }
 
-    // NOT-LEGIT REVIEW (AUTO CLOSE)
+    // NOT-LEGIT REVIEW
     if (i.customId === 'notlegit_positive' || i.customId === 'notlegit_false') {
-      if (!isStaff(i.member)) {
-        return i.reply({ content: `❌ Only staff can review this.`, flags: MessageFlags.Ephemeral });
-      }
-
+      if (!isStaff(i.member)) return i.reply({ content: `❌ Only staff can review this.`, flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
-
       const nlt = await getNotLegitTickets();
       const entry = nlt[i.channelId];
       const tickets = await getTickets();
       const ticket = tickets[i.channelId];
 
-      if (!entry || !ticket || ticket.categorie !== 'notlegit') {
-        return i.editReply({ content: '❌ This is not an active Not-Legit proof ticket.' });
-      }
-      if (entry.status !== 'pending') {
-        return i.editReply({ content: `❌ Already reviewed as **${entry.status}**.` });
-      }
+      if (!entry || !ticket || ticket.categorie !== 'notlegit') return i.editReply({ content: '❌ This is not an active Not-Legit proof ticket.' });
+      if (entry.status !== 'pending') return i.editReply({ content: `❌ Already reviewed as **${entry.status}**.` });
 
       try {
         const targetUserId = entry.userId;
@@ -1078,9 +1014,7 @@ client.on('interactionCreate', async (i) => {
           await saveLegitVotes(votes);
           await saveConfirmedRejects(confirmed);
           await setNotLegitStatus(i.channelId, 'positive');
-
           await setupLegit();
-
           await i.channel.send({ content: `✅ Reviewed as **Positive**. ❌ vote has been added. Ticket is closing...` });
           await sendLog('✅ Not-Legit Confirmed', `<@${targetUserId}> proof approved by <@${i.user.id}>.`, 0x00ff88);
           await i.editReply({ content: '✅ Reviewed as **Positive**. Ticket closing...' });
@@ -1090,13 +1024,8 @@ client.on('interactionCreate', async (i) => {
           await sendLog('❌ Not-Legit Rejected', `<@${targetUserId}> proof rejected by <@${i.user.id}>.`, 0xff4444);
           await i.editReply({ content: '❌ Reviewed as **False**. Ticket closing...' });
         }
-
         await closeTicket(i.channel, i.user.id);
-
-      } catch (e) {
-        console.error('notlegit review error:', e);
-        try { await i.editReply({ content: `❌ Error: ${e.message}` }); } catch (_) {}
-      }
+      } catch (e) { console.error(e); try { await i.editReply({ content: `❌ Error: ${e.message}` }); } catch (_) {} }
       return;
     }
 
@@ -1117,22 +1046,11 @@ client.on('interactionCreate', async (i) => {
 client.on('guildMemberAdd', async (member) => {
   if (member.guild.id !== GUILD_ID) return;
   try {
-    const embed = new EmbedBuilder()
-      .setTitle('Welcome to Prestige Market!')
-      .setColor(0x5865f2)
-      .setThumbnail(LOGO)
-      .setDescription(
-        `Hey <@${member.id}>,\n\n` +
-        `Welcome to the **Prestige Market** Discord server!\n\n` +
-        `Please make sure to read the rules and accept them in the verify channel to get access.`
-      )
-      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
-      .setTimestamp();
-      
+    const embed = new EmbedBuilder().setTitle('Welcome to Prestige Market!').setColor(0x5865f2).setThumbnail(LOGO)
+      .setDescription(`Hey <@${member.id}>,\n\nWelcome to the **Prestige Market** Discord server!\n\nPlease make sure to read the rules and accept them in the verify channel to get access.`)
+      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
     await member.send({ embeds: [embed] });
-  } catch (e) {
-    console.log(`Could not send welcome DM to ${member.user.tag} (DMs closed).`);
-  }
+  } catch (e) {}
   await updateVerifyMessage();
 });
 
@@ -1143,25 +1061,18 @@ client.on('guildMemberRemove', async (member) => {
 
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
   if (newMember.guild.id !== GUILD_ID) return;
-  
   const hadRole = oldMember.roles.cache.has(VERIFIED_ROLE_ID);
   const hasRole = newMember.roles.cache.has(VERIFIED_ROLE_ID);
-
-  if (hadRole !== hasRole) {
-    await updateVerifyMessage();
-  }
+  if (hadRole !== hasRole) await updateVerifyMessage();
 });
 
 client.once('ready', async () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
   startStatusInterval();
-
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupVerify();
-  
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupLegit();
-  
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupTicketPanel();
 });
