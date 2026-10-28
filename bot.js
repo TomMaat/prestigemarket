@@ -511,7 +511,7 @@ async function setupPaymentMethods() {
     if (!channel) return console.error(`❌ Payment methods channel (${PAYMENT_METHODS_CHANNEL_ID}) not found.`);
 
     const embed = new EmbedBuilder()
-      .setTitle('## Payment Methods')
+      .setTitle('Payment Methods')
       .setDescription(
         `<:arrowrightalt:1564725822772879473>   <:ideal:1564724669129560174>  **(Ideal)**\n` +
         `<:arrowrightalt:1564725822772879473>  <:paypal:1564726369219510354> **(paypal)**\n` +
@@ -644,7 +644,7 @@ async function updateServiceShop(serviceName) {
     const productLines = products.length > 0 ? products.map(p => `> ${p}`).join('\n') : '*No products available yet.*';
 
     const embed = new EmbedBuilder()
-      .setTitle(`# Prestige ${serviceName} Shop`)
+      .setTitle(`Prestige ${serviceName} Shop`)
       .setColor(0x2b2b2b)
       .setDescription(
         `${productLines}\n\n` +
@@ -653,7 +653,7 @@ async function updateServiceShop(serviceName) {
         `- Choose your preferred service\n` +
         `- Ask for prices and availability\n` +
         `- Complete your purchase\n\n` +
-        `# 𝙋𝙍𝙀𝙎𝙏𝙄𝙂𝙀\n` +
+        `Prestige\n` +
         `*Your entertainment, your choice.*`
       )
       .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
@@ -1901,6 +1901,17 @@ client.once('ready', async () => {
 
   await new Promise(resolve => setTimeout(resolve, 3000));
   await updateEarningsPanel();
+
+  // Zorg dat het kanaal voor Streaming gekoppeld is en de embed plaatst
+  const store = await getStoreData();
+  if (store.services['Streaming'] && !store.serviceChannels?.['Streaming']) {
+    if (!store.serviceChannels) store.serviceChannels = {};
+    store.serviceChannels['Streaming'] = '1564628292269772892';
+    await saveStoreData(store);
+  }
+  if (store.serviceChannels?.['Streaming']) {
+    await updateServiceShop('Streaming');
+  }
 });
 
 client.login(TOKEN);
