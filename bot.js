@@ -468,7 +468,8 @@ function buildStoreRow() {
     new ButtonBuilder().setCustomId('store_add_section').setLabel('Add Section').setEmoji('➕').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('store_add_service').setLabel('Add Service').setEmoji('➕').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('store_add_product').setLabel('Add Product').setEmoji('➕').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId('store_add_price').setLabel('Add Price').setEmoji('💰').setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId('store_add_price').setLabel('Add Price').setEmoji('💰').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('store_remove').setLabel('Remove').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
   );
 }
 
@@ -913,6 +914,123 @@ client.on('interactionCreate', async (i) => {
       return;
     }
 
+    // ===== REMOVE FLOW =====
+    if (i.customId === 'store_remove_type') {
+      const type = i.values[0];
+      const store = await getStoreData();
+
+      if (type === 'section') {
+        const sections = Object.keys(store.sections);
+        if (sections.length === 0) return i.update({ content: '❌ No sections to remove.', components: [] });
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId('store_remove_section')
+          .setPlaceholder('Select a section to remove')
+          .addOptions(sections.map(s => ({ label: s, value: s })));
+        return i.update({ content: '🗑️ Which **section** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
+
+      if (type === 'service') {
+        const services = Object.keys(store.services);
+        if (services.length === 0) return i.update({ content: '❌ No services to remove.', components: [] });
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId('store_remove_service')
+          .setPlaceholder('Select a service to remove')
+          .addOptions(services.map(s => ({ label: s, value: s })));
+        return i.update({ content: '🗑️ Which **service** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
+
+      if (type === 'product') {
+        const products = Object.keys(store.products);
+        if (products.length === 0) return i.update({ content: '❌ No products to remove.', components: [] });
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId('store_remove_product')
+          .setPlaceholder('Select a product to remove')
+          .addOptions(products.map(p => ({ label: p, value: p })));
+        return i.update({ content: '🗑️ Which **product** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
+
+      if (type === 'price') {
+        const products = Object.entries(store.products).filter(([_, p]) => p.price || p.amount);
+        if (products.length === 0) return i.update({ content: '❌ No prices to remove.', components: [] });
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId('store_remove_price')
+          .setPlaceholder('Select a product price to remove')
+          .addOptions(products.map(([name, p]) => ({ label: `${name} (${p.price || 'N/A'})`, value: name })));
+        return i.update({ content: '🗑️ Which **price** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
+      return;
+    }
+
+    if (i.customId === 'store_remove_section') {
+      const section = i.values[0];
+      const store = await getStoreData();
+      const services = store.sections[section] || [];
+
+      // Remove services + products that belong only to this section
+      for (const service of services) {
+        const stillUsed = Object.entries(store.sections).some(([s, list]) => s !== section && list.includes(service));
+        if (!stillUsed) {
+          const prods = store.services[service] || [];
+          for (const prod of prods) {
+            const prodUsed = Object.values(store.services).some(list => list.includes(prod));
+            if (!prodUsed) delete store.products[prod];
+          }
+          delete store.services[service];
+        }
+      }
+
+      delete store.sections[section];
+      await saveStoreData(store);
+      await updateStorePanel();
+      return i.update({ content: `✅ Section **${section}** removed.`, components: [] });
+    }
+
+    if (i.customId === 'store_remove_service') {
+      const service = i.values[0];
+      const store = await getStoreData();
+
+      for (const [sec, list] of Object.entries(store.sections)) {
+        store.sections[sec] = list.filter(s => s !== service);
+      }
+
+      const prods = store.services[service] || [];
+      for (const prod of prods) {
+        const prodUsed = Object.values(store.services).some(list => list.includes(prod));
+        if (!prodUsed) delete store.products[prod];
+      }
+
+      delete store.services[service];
+      await saveStoreData(store);
+      await updateStorePanel();
+      return i.update({ content: `✅ Service **${service}** removed.`, components: [] });
+    }
+
+    if (i.customId === 'store_remove_product') {
+      const product = i.values[0];
+      const store = await getStoreData();
+
+      for (const [svc, list] of Object.entries(store.services)) {
+        store.services[svc] = list.filter(p => p !== product);
+      }
+
+      delete store.products[product];
+      await saveStoreData(store);
+      await updateStorePanel();
+      return i.update({ content: `✅ Product **${product}** removed.`, components: [] });
+    }
+
+    if (i.customId === 'store_remove_price') {
+      const product = i.values[0];
+      const store = await getStoreData();
+      if (!store.products[product]) return i.update({ content: '❌ Product not found.', components: [] });
+      store.products[product].price = 'N/A';
+      store.products[product].amount = '';
+      await saveStoreData(store);
+      await updateStorePanel();
+      return i.update({ content: `✅ Price for **${product}** removed.`, components: [] });
+    }
+
+    // ===== EXISTING STORE FLOWS =====
     if (i.customId === 'select_section_for_service') {
       const section = i.values[0];
       const modal = new ModalBuilder().setCustomId(`modal_add_service_${section}`).setTitle('Add Service');
@@ -1134,6 +1252,20 @@ client.on('interactionCreate', async (i) => {
         .addOptions(products.map(p => ({ label: p, value: p })));
 
       return i.reply({ content: 'Which product do you want to set a price for?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+    }
+
+    if (i.customId === 'store_remove') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('store_remove_type')
+        .setPlaceholder('What do you want to remove?')
+        .addOptions([
+          { label: 'Section', value: 'section', emoji: '🔹' },
+          { label: 'Service', value: 'service', emoji: '🔧' },
+          { label: 'Product', value: 'product', emoji: '📦' },
+          { label: 'Price', value: 'price', emoji: '💰' },
+        ]);
+      return i.reply({ content: '🗑️ What do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
     }
 
     if (i.customId === 'verify_accept_rules') {
