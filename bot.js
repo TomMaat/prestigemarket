@@ -35,7 +35,7 @@ const INVITE_OVERVIEW_CHANNEL_ID = '1565359774982348890';
 const BOOST_CHANNEL_ID = '1564415311401320518';
 const WELCOME_CHANNEL_ID = '1565405396527489134';
 const TICKET_STATS_CHANNEL_ID = '1565405683678191686';
-const RESTOCK_CHANNEL_ID = '1564551527027187773'; // <-- set your restock channel ID
+const RESTOCK_CHANNEL_ID = '1564551527027187773';
 
 const EARNER_1_ID = '710623438657683486';
 const EARNER_2_ID = '755111368839135367';
@@ -229,6 +229,16 @@ function buildVouchProductLabel(entry) {
   if (qty && qty > 1 && !unit) return `${qty}x ${entry.product}`;
   if (qty && qty > 1 && unit) return `${qty} ${entry.product}`;
   return entry.product;
+}
+function calculateProfit(totalPrice, quantity, prodData) {
+  if (!prodData) return 0;
+  const buyCostPer = prodData.buyCost ? parsePrice(prodData.buyCost) : 0;
+  const qty = quantity || 1;
+  if (prodData.amount) {
+    const amountPer = parsePrice(prodData.amount) || 1;
+    return totalPrice - (buyCostPer * (qty / amountPer));
+  }
+  return totalPrice - (buyCostPer * qty);
 }
 
 // ===== Ticket Stats =====
@@ -854,7 +864,7 @@ client.on('interactionCreate', async (i) => {
       const embed = new EmbedBuilder()
         .setTitle(`🔍 Customer Stats for ${targetUser.tag}`).setColor(0x00ff88).setThumbnail(targetUser.displayAvatarURL())
         .setDescription(`**Total Tickets:** ${ticketCount}\n**Total Spent:** €${totalSpent.toFixed(2)}\n\n**Purchases:**\n` +
-          (purchases.length ? purchases.map(p => `> ${buildVouchProductLabel(p)} - ${p.total}`).join('\n') : '*No purchases yet.*'))
+          (purchases.length ? purchases.map(p => `> ${buildVouchProductLabel(p)} - ${p.total}${p.sellerId ? ` (seller: <@${p.sellerId}>)` : ''}`).join('\n') : '*No purchases yet.*'))
         .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
       return i.editReply({ embeds: [embed] });
     }
@@ -973,6 +983,7 @@ client.on('interactionCreate', async (i) => {
       const last = purchases[purchases.length - 1];
       const extra = i.options.getString('extra') || 'Great service!';
       const productLabel = buildVouchProductLabel(last);
+      const sellerId = last.sellerId || null;
 
       try {
         const ch = await client.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
@@ -986,11 +997,12 @@ client.on('interactionCreate', async (i) => {
           .addFields(
             { name: 'Product', value: productLabel, inline: true },
             { name: 'Customer', value: `<@${i.user.id}>`, inline: true },
+            { name: 'Seller', value: sellerId ? `<@${sellerId}>` : '*Unknown*', inline: true },
             { name: 'Extra', value: extra, inline: false }
           ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
 
         await ch.send({ embeds: [embed] });
-        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**.`, 0x00ff88);
+        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**${sellerId ? ` (seller: <@${sellerId}>)` : ''}.`, 0x00ff88);
         try { await i.user.send({ content: `✅ Your vouch for **${productLabel}** has been posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (err) {}
         return i.editReply({ content: `✅ Vouch posted for **${productLabel}**!` });
       } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
@@ -1117,7 +1129,7 @@ client.on('interactionCreate', async (i) => {
         const prodData = store.products[ticket.product];
         let profit = 0;
         const totalPrice = parsePrice(ticket.total);
-        if (prodData) profit = totalPrice - ((prodData.buyCost ? parsePrice(prodData.buyCost) : 0) * (ticket.quantity || 1));
+        if (prodData) profit = calculateProfit(totalPrice, ticket.quantity, prodData);
         if (profit !== 0 && PAYMENT_COMMAND_ALLOWED_IDS.includes(i.user.id)) {
           const earnings = await getEarnings();
           earnings[i.user.id] = (earnings[i.user.id] || 0) + profit;
@@ -1138,7 +1150,9 @@ client.on('interactionCreate', async (i) => {
           product: ticket.product,
           quantity: ticket.quantity,
           total: ticket.total,
-          unit: prodInfo.amount || null
+          unit: prodInfo.amount || null,
+          sellerId: i.user.id,
+          deliveredAt: Date.now()
         });
         await saveCustomerHistory(history);
         const member = await i.guild.members.fetch(ticket.userId).catch(() => null);
@@ -2169,14 +2183,12 @@ client.once('ready', async () => {
 
   const store = await getStoreData();
 
-  // Auto-link Streaming if it exists but has no channel
   if (store.services['Streaming'] && !store.serviceChannels?.['Streaming']) {
     if (!store.serviceChannels) store.serviceChannels = {};
     store.serviceChannels['Streaming'] = '1564628292269772892';
     await saveStoreData(store);
   }
 
-  // Clean orphan service channels (services that no longer exist)
   let cleaned = false;
   for (const serviceName of Object.keys(store.serviceChannels || {})) {
     if (!store.services[serviceName]) {
@@ -2187,7 +2199,6 @@ client.once('ready', async () => {
   }
   if (cleaned) await saveStoreData(store);
 
-  // Only update shops for services that still exist
   for (const serviceName of Object.keys(store.serviceChannels || {})) {
     if (store.services[serviceName]) await updateServiceShop(serviceName);
   }
