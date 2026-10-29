@@ -427,8 +427,9 @@ function buildInviteRewardsEmbed() {
       `> Share it with your friends.\n` +
       `> Check your invites via **Check My Invites**.\n\n` +
       `**Rewards:**\n` +
+      `> 🔥 **5 Valid Invites** → **1x 5% Discount**\n` +
       `> 🔥 **10 Valid Invites** → **1x 10% Discount**\n` +
-      `> 🔥 **20 Valid Invites** → **2x 10% Discount**\n\n` +
+      `> *(Je kunt ook meerdere 5% kortingen pakken in plaats van 10%)*\n\n` +
       `**How to claim:**\n` +
       `> Open a ticket with a staff member and mention your reward.\n\n` +
       `-# We do not accept fake invites or bots. Invites from users who were previously in the server do not count.`
@@ -478,8 +479,10 @@ function buildInviteOverviewEmbed(invites) {
 
   let desc = '';
   for (const [userId, data] of entries) {
-    const availableRewards = Math.floor(data.valid / 10);
-    desc += `<@${userId}>: **${data.valid}** valid invites — **${availableRewards}x 10%** available\n`;
+    const availableTens = Math.floor(data.valid / 10);
+    const availableFives = Math.floor((data.valid % 10) / 5);
+    const rewardText = `${availableTens > 0 ? `${availableTens}x 10%` : ''} ${availableFives > 0 ? `${availableFives}x 5%` : ''}`.trim() || '0';
+    desc += `<@${userId}>: **${data.valid}** valid invites — **${rewardText}** available\n`;
   }
 
   embed.setDescription(desc);
@@ -1204,7 +1207,9 @@ client.on('interactionCreate', async (i) => {
       const invites = await getUserInvites();
       const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
       const invitedList = (userData.invitedUsers || []).map(id => `<@${id}>`).join('\n') || '*Nobody*';
-      const availableRewards = Math.floor(userData.valid / 10);
+      const availableTens = Math.floor(userData.valid / 10);
+      const availableFives = Math.floor((userData.valid % 10) / 5);
+      const rewardText = `${availableTens > 0 ? `${availableTens}x 10%` : ''} ${availableFives > 0 ? `${availableFives}x 5%` : ''}`.trim() || '0';
 
       const embed = new EmbedBuilder()
         .setTitle(`📊 Invites for ${targetUser.tag}`)
@@ -1212,7 +1217,7 @@ client.on('interactionCreate', async (i) => {
         .setThumbnail(targetUser.displayAvatarURL())
         .addFields(
           { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
-          { name: 'Available Rewards', value: `${availableRewards} rewards`, inline: true },
+          { name: 'Available Rewards', value: rewardText, inline: true },
           { name: 'Invited Users', value: invitedList, inline: false }
         )
         .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
@@ -1251,7 +1256,7 @@ client.on('interactionCreate', async (i) => {
       const invites = await getUserInvites();
       const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
 
-      const requiredInvites = 10;
+      const requiredInvites = reward === '5' ? 5 : 10;
       if (userData.valid < requiredInvites) {
         return i.editReply({ content: `❌ ${targetUser.username} has only **${userData.valid}** valid invites, but needs **${requiredInvites}** to claim the **${reward}%** reward.` });
       }
@@ -2723,19 +2728,15 @@ client.on('interactionCreate', async (i) => {
       const invites = await getUserInvites();
       const userData = invites[i.user.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
       
-      // Bepaal de rewards tekst
-      let rewardsText = '0 rewards';
-      if (userData.valid >= 10) {
-        const tens = Math.floor(userData.valid / 10);
-        const fives = Math.floor(userData.valid / 5); // Alleen als je ook 5% wilt tonen
-
-        if (tens >= 2) {
-          rewardsText = `${tens} x 10%`;
-        } else if (tens === 1) {
-          rewardsText = `1 x 10%`;
-        } else if (fives >= 2) {
-          rewardsText = `${fives} x 5%`;
-        }
+      const availableTens = Math.floor(userData.valid / 10);
+      const availableFives = Math.floor((userData.valid % 10) / 5);
+      
+      let rewardText = '0 rewards';
+      if (availableTens > 0 || availableFives > 0) {
+        const parts = [];
+        if (availableTens > 0) parts.push(`${availableTens}x 10%`);
+        if (availableFives > 0) parts.push(`${availableFives}x 5%`);
+        rewardText = parts.join(' + ');
       }
 
       const embed = new EmbedBuilder()
@@ -2744,7 +2745,7 @@ client.on('interactionCreate', async (i) => {
         .setThumbnail(i.user.displayAvatarURL())
         .addFields(
           { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
-          { name: 'Available Rewards', value: `${rewardsText}`, inline: true }
+          { name: 'Available Rewards', value: rewardText, inline: true }
         )
         .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
         .setTimestamp();
