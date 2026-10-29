@@ -459,10 +459,10 @@ async function setupPaymentMethods() {
     const embed = new EmbedBuilder()
       .setTitle('Payment Methods')
       .setDescription(
-        `<:arrowrightalt:1564725822772879473>   <:ideal:1564724669129560174>  **(Ideal)**\n` +
-        `<:arrowrightalt:1564725822772879473>  <:paypal:1564726369219510354> **(paypal)**\n` +
-        `<:arrowrightalt:1564725822772879473>  <:ltc:1564724536979759124>  **(Cryptocurrencies, LTC) = 10% Off!**\n` +
-        `<:arrowrightalt:1564725822772879473>  <:bank:1564724257164886078>  **(Bank transfer)**\n\n` +
+        `→   <:ideal:1564724669129560174>  **(Ideal)**\n` +
+        `→  <:paypal:1564726369219510354> **(paypal)**\n` +
+        `→  <:ltc:1564724536979759124>  **(Cryptocurrencies, LTC) = 10% Off!**\n` +
+        `→  <:bank:1564724257164886078>  **(Bank transfer)**\n\n` +
         `-# Please share your suggestions for new payment methods we can add.`)
       .setColor(0x2b2b2b);
     const messageId = await getPaymentMethodsMessageId();
