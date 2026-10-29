@@ -367,10 +367,8 @@ async function setupLegit() {
     const row = buildLegitRow(votes);
     const messageId = await getLegitMessageId();
     if (messageId) {
-      try {
-        const msg = await ch.messages.fetch(messageId);
-        if (msg && msg.author.id === client.user.id) { await msg.edit({ embeds: [embed], components: [row] }); return; }
-      } catch (e) {}
+      const msg = await ch.messages.fetch(messageId).catch(() => null);
+      if (msg && msg.author.id === client.user.id) { await msg.edit({ embeds: [embed], components: [row] }); return; }
     }
     const newMsg = await ch.send({ embeds: [embed], components: [row] });
     await setLegitMessageId(newMsg.id);
@@ -390,7 +388,10 @@ async function updateVerifyMessage() {
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
     const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
     const msg = await ch.messages.fetch(messageId).catch(() => null);
-    if (!msg) return;
+    if (!msg) {
+      // Message gone → recreate
+      return await setupVerify();
+    }
     const embed = new EmbedBuilder()
       .setAuthor({ name: 'PRESTIGE RULES', iconURL: LOGO }).setColor(0x2b2b2b)
       .setDescription(`Welcome to Prestige. Please read the rules carefully before placing an order.\n\n${RULES_TEXT}`)
@@ -405,8 +406,8 @@ async function setupVerify() {
   try {
     const ch = await client.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
     if (!ch) return console.error('❌ Verify channel not found.');
-    const fetched = await ch.messages.fetch({ limit: 50 });
-    for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
+    const fetched = await ch.messages.fetch({ limit: 50 }).catch(() => null);
+    if (fetched) for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
     const guild = ch.guild;
     await guild.members.fetch();
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
@@ -467,10 +468,11 @@ async function setupPaymentMethods() {
     const messageId = await getPaymentMethodsMessageId();
     if (messageId) {
       const msg = await ch.messages.fetch(messageId).catch(() => null);
-      if (msg) { await msg.edit({ embeds: [embed] }); return; }
+      if (msg) { await msg.edit({ embeds: [embed] }); console.log('✅ Payment methods updated'); return; }
     }
     const newMsg = await ch.send({ embeds: [embed] });
     await setPaymentMethodsMessageId(newMsg.id);
+    console.log('✅ Payment methods placed');
   } catch (e) { console.error('Payment methods error:', e.message); }
 }
 
@@ -559,8 +561,8 @@ async function setupStorePanel() {
   try {
     const ch = await client.channels.fetch(STORE_PANEL_CHANNEL_ID).catch(() => null);
     if (!ch) return console.error('❌ Store panel channel not found.');
-    const fetched = await ch.messages.fetch({ limit: 50 });
-    for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
+    const fetched = await ch.messages.fetch({ limit: 50 }).catch(() => null);
+    if (fetched) for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
     const newMsg = await ch.send({ embeds: [buildStoreEmbed(await getStoreData())], components: buildStoreRows() });
     await setStorePanelMessageId(newMsg.id);
     console.log('✅ Store panel placed');
@@ -571,9 +573,9 @@ async function updateStorePanel() {
     const ch = await client.channels.fetch(STORE_PANEL_CHANNEL_ID).catch(() => null);
     if (!ch) return;
     const messageId = await getStorePanelMessageId();
-    if (!messageId) return;
+    if (!messageId) return setupStorePanel();
     const msg = await ch.messages.fetch(messageId).catch(() => null);
-    if (!msg) return;
+    if (!msg) return setupStorePanel();
     await msg.edit({ embeds: [buildStoreEmbed(await getStoreData())], components: buildStoreRows() });
   } catch (e) { console.error('Store update error:', e.message); }
 }
@@ -627,8 +629,8 @@ async function setupTicketPanel() {
   try {
     const ch = await client.channels.fetch(TICKET_PANEL_CHANNEL_ID).catch(() => null);
     if (!ch) return;
-    const fetched = await ch.messages.fetch({ limit: 50 });
-    for (const m of fetched.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
+    const fetched = await ch.messages.fetch({ limit: 50 }).catch(() => null);
+    if (fetched) for (const m of fetched.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
     await ch.send({ embeds: [buildTicketPanelEmbed()], components: [buildTicketPanelMenu()] });
     console.log('✅ Ticket panel placed');
   } catch (e) { console.error('Ticket panel error:', e.message); }
@@ -683,7 +685,6 @@ async function refreshChannel(channel) {
   const id = channel.id;
   const store = await getStoreData();
 
-  // Delete recent bot messages in this channel
   const fetched = await channel.messages.fetch({ limit: 50 }).catch(() => null);
   if (fetched) for (const m of fetched.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
 
@@ -698,7 +699,6 @@ async function refreshChannel(channel) {
   if (id === INVITE_OVERVIEW_CHANNEL_ID) { await updateInviteOverview(); return 'Invite overview'; }
   if (id === TICKET_STATS_CHANNEL_ID) { await updateTicketStats(); return 'Ticket stats'; }
 
-  // Service shop channel?
   for (const serviceName of Object.keys(store.serviceChannels || {})) {
     if (store.serviceChannels[serviceName] === id) {
       await updateServiceShop(serviceName);
