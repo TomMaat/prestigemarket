@@ -719,7 +719,8 @@ async function runGiveaway(channel, winners, product, durationMs, blacklistRoles
   } catch (e) { console.error('Giveaway error:', e.message); }
 }
 
-// ===== STORE MANAGEMENT SYSTEM =====function buildStoreEmbed(store) {
+// ===== STORE MANAGEMENT SYSTEM =====
+function buildStoreEmbed(store) {
   const embed = new EmbedBuilder()
     .setTitle('🛒 Store Management')
     .setColor(0x5865f2)
