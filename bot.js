@@ -46,6 +46,8 @@ const CUSTOMER_OVERVIEW_CHANNEL_ID = '1565133390431395840';
 const INVITE_REWARDS_CHANNEL_ID = '1564551605095768064';
 const INVITE_OVERVIEW_CHANNEL_ID = '1565359774982348890';
 const BOOST_CHANNEL_ID = '1564415311401320518';
+const WELCOME_CHANNEL_ID = '1565405396527489134';
+const TICKET_STATS_CHANNEL_ID = '1565405683678191686';
 
 // Earnings Users
 const EARNER_1_ID = '710623438657683486';
@@ -192,6 +194,8 @@ async function readGist() {
       userRewards: {},
       inviteRewardsMessageId: null,
       inviteOverviewMessageId: null,
+      ticketStats: { total: 0, closed: 0 },
+      ticketStatsMessageId: null,
     };
   }
 
@@ -219,6 +223,8 @@ async function readGist() {
     userRewards: parsed.userRewards || {},
     inviteRewardsMessageId: parsed.inviteRewardsMessageId || null,
     inviteOverviewMessageId: parsed.inviteOverviewMessageId || null,
+    ticketStats: parsed.ticketStats || { total: 0, closed: 0 },
+    ticketStatsMessageId: parsed.ticketStatsMessageId || null,
   };
 }
 
@@ -316,6 +322,11 @@ async function setInviteRewardsMessageId(id) { const d = await readGist(); d.inv
 async function getInviteOverviewMessageId() { const d = await readGist(); return d.inviteOverviewMessageId; }
 async function setInviteOverviewMessageId(id) { const d = await readGist(); d.inviteOverviewMessageId = id; await writeGist(d); }
 
+async function getTicketStats() { const d = await readGist(); return d.ticketStats || { total: 0, closed: 0 }; }
+async function saveTicketStats(s) { const d = await readGist(); d.ticketStats = s; await writeGist(d); }
+async function getTicketStatsMessageId() { const d = await readGist(); return d.ticketStatsMessageId; }
+async function setTicketStatsMessageId(id) { const d = await readGist(); d.ticketStatsMessageId = id; await writeGist(d); }
+
 // ===== HELPERS =====
 function isStaff(member) {
   return member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
@@ -364,6 +375,46 @@ function parseDuration(str) {
   const unit = match[2].toLowerCase();
   const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
   return amount * multipliers[unit];
+}
+
+// ===== TICKET STATS =====
+function buildTicketStatsEmbed(stats, openCount) {
+  return new EmbedBuilder()
+    .setTitle('📊 Ticket Statistics')
+    .setColor(0x5865f2)
+    .setThumbnail(LOGO)
+    .addFields(
+      { name: '🟢 Open Tickets', value: `**${openCount}**`, inline: true },
+      { name: '📁 Total Tickets', value: `**${stats.total}**`, inline: true },
+      { name: '🔒 Closed Tickets', value: `**${stats.closed}**`, inline: true }
+    )
+    .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+    .setTimestamp();
+}
+
+async function updateTicketStats() {
+  try {
+    const channel = await client.channels.fetch(TICKET_STATS_CHANNEL_ID).catch(() => null);
+    if (!channel) return;
+
+    const tickets = await getTickets();
+    const openCount = Object.keys(tickets).length;
+    const stats = await getTicketStats();
+    const embed = buildTicketStatsEmbed(stats, openCount);
+
+    const messageId = await getTicketStatsMessageId();
+    if (messageId) {
+      const msg = await channel.messages.fetch(messageId).catch(() => null);
+      if (msg) {
+        await msg.edit({ embeds: [embed] });
+        return;
+      }
+    }
+
+    const newMsg = await channel.send({ embeds: [embed] });
+    await setTicketStatsMessageId(newMsg.id);
+    console.log('✅ Ticket Stats placed');
+  } catch (e) { console.error('Failed to update ticket stats:', e.message); }
 }
 
 // ===== CUSTOMER OVERVIEW =====
@@ -428,8 +479,7 @@ function buildInviteRewardsEmbed() {
       `> Check your invites via **Check My Invites**.\n\n` +
       `**Rewards:**\n` +
       `> 🔥 **5 Valid Invites** → **1x 5% Discount**\n` +
-      `> 🔥 **10 Valid Invites** → **1x 10% Discount**\n` +
-      `> *(Je kunt ook meerdere 5% kortingen pakken in plaats van 10%)*\n\n` +
+      `> 🔥 **10 Valid Invites** → **1x 10% Discount**\n\n` +
       `**How to claim:**\n` +
       `> Open a ticket with a staff member and mention your reward.\n\n` +
       `-# We do not accept fake invites or bots. Invites from users who were previously in the server do not count.`
@@ -1085,6 +1135,12 @@ async function closeTicket(channel, closerId) {
   } catch (e) { console.error('Transcript error:', e.message); }
 
   await removeTicket(channel.id);
+
+  const stats = await getTicketStats();
+  stats.closed += 1;
+  await saveTicketStats(stats);
+  await updateTicketStats();
+
   setTimeout(async () => { try { await channel.delete('Ticket closed'); } catch (e) {} }, 5000);
 }
 
@@ -1119,7 +1175,7 @@ const commands = [
   ] },
   { name: 'editcustomer', description: 'Edit the amount a customer spent', options: [
       { name: 'user', description: 'User', type: 6, required: true },
-      { name: 'earned', description: 'New earned amount (e.g. 0,75)', type: 3, required: true }
+      { name: 'spent', description: 'New spent amount (e.g. 0,75)', type: 3, required: true }
   ] },
   { name: 'resetearned', description: 'Reset all earnings to 0' },
   { name: 'clearallproducts', description: 'Clear all products and store data' },
@@ -1233,20 +1289,20 @@ client.on('interactionCreate', async (i) => {
 
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       const targetUser = i.options.getUser('user');
-      const earnedRaw = i.options.getString('earned');
+      const spentRaw = i.options.getString('spent');
       
-      const earned = parseFloat(earnedRaw.replace(',', '.').replace('€', '').trim());
-      if (isNaN(earned) || earned < 0) {
+      const spentAmount = parseFloat(spentRaw.replace(',', '.').replace('€', '').trim());
+      if (isNaN(spentAmount) || spentAmount < 0) {
         return i.editReply({ content: '❌ Invalid amount. Use a number like `0,75` or `5.50`.' });
       }
 
       const spent = await getCustomerSpent();
       const oldAmount = spent[targetUser.id] || 0;
-      spent[targetUser.id] = earned;
+      spent[targetUser.id] = spentAmount;
       await saveCustomerSpent(spent);
       await updateCustomerOverview();
-      await sendLog('✏️ Customer Edited', `<@${i.user.id}> changed <@${targetUser.id}>'s earned from **€${oldAmount.toFixed(2)}** to **€${earned.toFixed(2)}**.`, 0xffaa00);
-      return i.editReply({ content: `✅ Updated <@${targetUser.id}> earned from **€${oldAmount.toFixed(2)}** to **€${earned.toFixed(2)}**.` });
+      await sendLog('✏️ Customer Edited', `<@${i.user.id}> changed <@${targetUser.id}>'s spent from **€${oldAmount.toFixed(2)}** to **€${spentAmount.toFixed(2)}**.`, 0xffaa00);
+      return i.editReply({ content: `✅ Updated <@${targetUser.id}> spent from **€${oldAmount.toFixed(2)}** to **€${spentAmount.toFixed(2)}**.` });
     }
 
     if (name === 'userewards') {
@@ -1833,6 +1889,11 @@ client.on('interactionCreate', async (i) => {
         customerTickets[i.user.id] = (customerTickets[i.user.id] || 0) + 1;
         await saveCustomerTickets(customerTickets);
 
+        const stats = await getTicketStats();
+        stats.total += 1;
+        await saveTicketStats(stats);
+        await updateTicketStats();
+
         const embed = new EmbedBuilder()
           .setTitle(cat.name)
           .setColor(cat.color)
@@ -2037,6 +2098,11 @@ client.on('interactionCreate', async (i) => {
         const customerTickets = await getCustomerTickets();
         customerTickets[userId] = (customerTickets[userId] || 0) + 1;
         await saveCustomerTickets(customerTickets);
+
+        const stats = await getTicketStats();
+        stats.total += 1;
+        await saveTicketStats(stats);
+        await updateTicketStats();
 
         const embed = new EmbedBuilder().setTitle(cat.name).setColor(cat.color).setDescription(`<@${userId}> — Please describe your question below.`).setTimestamp();
         const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
@@ -2326,6 +2392,11 @@ client.on('interactionCreate', async (i) => {
         customerTickets[userId] = (customerTickets[userId] || 0) + 1;
         await saveCustomerTickets(customerTickets);
 
+        const stats = await getTicketStats();
+        stats.total += 1;
+        await saveTicketStats(stats);
+        await updateTicketStats();
+
         const embed = new EmbedBuilder()
           .setTitle('🛒 Purchase Details')
           .setColor(0x00ff88)
@@ -2610,6 +2681,11 @@ client.on('interactionCreate', async (i) => {
         notLegitStore[ticketChannel.id] = { userId: i.user.id, status: 'pending', createdAt: Date.now() };
         await saveNotLegitTickets(notLegitStore);
 
+        const stats = await getTicketStats();
+        stats.total += 1;
+        await saveTicketStats(stats);
+        await updateTicketStats();
+
         const promptEmbed = new EmbedBuilder().setTitle('Upload proof').setColor(0xff4444).setThumbnail(LOGO)
           .setDescription(`Please upload your proof here (screenshots, video, files).\n\nStaff will review it and click **Positive** or **False**.`)
           .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
@@ -2764,6 +2840,24 @@ client.on('guildMemberAdd', async (member) => {
       .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
     await member.send({ embeds: [embed] });
   } catch (e) {}
+
+  // Public welcome message
+  try {
+    const welcomeChannel = await client.channels.fetch(WELCOME_CHANNEL_ID).catch(() => null);
+    if (welcomeChannel) {
+      const welcomeEmbed = new EmbedBuilder()
+        .setTitle('🎉 Welcome to Prestige Market!')
+        .setColor(0x5865f2)
+        .setDescription(`Welcome <@${member.id}> to **Prestige Market**! 🎊\n\nWe are happy to have you here. Make sure to check out our store and open a ticket if you need any help.`)
+        .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+        .setImage(LOGO)
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      await welcomeChannel.send({ content: `<@${member.id}>`, embeds: [welcomeEmbed] });
+    }
+  } catch (e) { console.error('Welcome message error:', e.message); }
+
   await updateVerifyMessage();
 
   // Invite tracking
@@ -2880,6 +2974,9 @@ client.once('ready', async () => {
 
   await new Promise(resolve => setTimeout(resolve, 3000));
   await updateInviteOverview();
+
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  await updateTicketStats();
 
   const store = await getStoreData();
   if (store.services['Streaming'] && !store.serviceChannels?.['Streaming']) {
