@@ -291,8 +291,8 @@ async function setupInviteRewards() {
   try {
     const ch = await client.channels.fetch(INVITE_REWARDS_CHANNEL_ID).catch(() => null);
     if (!ch) return console.error('❌ Invite rewards channel not found.');
-    const fetched = await ch.messages.fetch({ limit: 50 });
-    for (const m of fetched.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
+    const fetched = await ch.messages.fetch({ limit: 50 }).catch(() => null);
+    if (fetched) for (const m of fetched.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
     const newMsg = await ch.send({ embeds: [buildInviteRewardsEmbed()], components: [buildInviteRewardsButtons()] });
     await setInviteRewardsMessageId(newMsg.id);
     console.log('✅ Invite rewards placed');
@@ -388,10 +388,7 @@ async function updateVerifyMessage() {
     const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID);
     const verifiedCount = verifiedRole ? verifiedRole.members.size : 0;
     const msg = await ch.messages.fetch(messageId).catch(() => null);
-    if (!msg) {
-      // Message gone → recreate
-      return await setupVerify();
-    }
+    if (!msg) return await setupVerify();
     const embed = new EmbedBuilder()
       .setAuthor({ name: 'PRESTIGE RULES', iconURL: LOGO }).setColor(0x2b2b2b)
       .setDescription(`Welcome to Prestige. Please read the rules carefully before placing an order.\n\n${RULES_TEXT}`)
@@ -711,9 +708,8 @@ async function refreshChannel(channel) {
 
 // ===== Commands =====
 const commands = [
-  { name: 'vouch', description: 'Leave a vouch', options: [
-      { name: 'product', description: 'What did you buy?', type: 3, required: true },
-      { name: 'extra', description: 'Extra information', type: 3, required: true } ] },
+  { name: 'vouch', description: 'Leave a vouch for your last purchase', options: [
+      { name: 'extra', description: 'Extra information (optional)', type: 3, required: false } ] },
   { name: 'payment', description: 'Send the payment details for this ticket', options: [
       { name: 'link_or_crypto', description: 'Payment link (iDeal/Tikkie) or Crypto Address (LTC)', type: 3, required: false },
       { name: 'bank_account_number', description: 'Bank account number (IBAN) for Bank Transfer', type: 3, required: false },
@@ -905,13 +901,21 @@ client.on('interactionCreate', async (i) => {
     if (name === 'vouch') {
       if (!i.member.roles.cache.has(VOUCH_ROLE_ID)) return i.reply({ content: `❌ You need the <@&${VOUCH_ROLE_ID}> role to use this command.`, flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const product = i.options.getString('product');
-      const extra = i.options.getString('extra');
+
+      const history = await getCustomerHistory();
+      const purchases = history[i.user.id] || [];
+      if (!purchases.length) return i.editReply({ content: '❌ You have no purchases yet. You can only vouch after buying something.' });
+
+      const last = purchases[purchases.length - 1];
+      const product = last.product;
+      const extra = i.options.getString('extra') || 'Great service!';
+
       try {
         const ch = await client.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
         if (!ch) return i.editReply({ content: '❌ Vouch channel not found.' });
         let nummer = 1;
         try { nummer = (await readVouchCounter()) + 1; await writeVouchCounter(nummer); cachedVouches = nummer; } catch (e) {}
+
         const embed = new EmbedBuilder()
           .setTitle(`Vouch #${nummer}`).setColor(0x00ff88).setThumbnail(LOGO)
           .setAuthor({ name: i.user.displayName, iconURL: i.user.displayAvatarURL() })
@@ -920,10 +924,11 @@ client.on('interactionCreate', async (i) => {
             { name: 'Customer', value: `<@${i.user.id}>`, inline: true },
             { name: 'Extra', value: extra, inline: false }
           ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+
         await ch.send({ embeds: [embed] });
-        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}).`, 0x00ff88);
-        try { await i.user.send({ content: `✅ Your vouch has been posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (err) {}
-        return i.editReply({ content: '✅ Vouch posted!' });
+        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${product}**.`, 0x00ff88);
+        try { await i.user.send({ content: `✅ Your vouch for **${product}** has been posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (err) {}
+        return i.editReply({ content: `✅ Vouch posted for **${product}**!` });
       } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
     }
 
@@ -1165,11 +1170,33 @@ client.on('interactionCreate', async (i) => {
       store.lastService = name;
       await saveStoreData(store);
       await updateStorePanel();
-      const channels = i.guild.channels.cache.filter(c => c.type === ChannelType.GuildText && c.id !== STORE_PANEL_CHANNEL_ID);
-      if (!channels.size) return i.reply({ content: `✅ Service **${name}** added to **${section}**. (No text channels found.)`, flags: MessageFlags.Ephemeral });
-      const menu = new StringSelectMenuBuilder().setCustomId(`link_channel_to_service_${name}`).setPlaceholder('Select a channel for this service shop')
-        .addOptions(channels.first(25).map(c => ({ label: c.name, value: c.id })));
-      return i.reply({ content: `✅ Service **${name}** added to **${section}**.\n\nLink a text channel to this service?`, components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+      return i.reply({
+        content: `✅ Service **${name}** added to **${section}**.\n\nClick the button below to link a text channel to this service shop (you can type \`#channel\`).`,
+        components: [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`link_channel_btn_${name}`).setLabel('Link Channel').setEmoji('🔗').setStyle(ButtonStyle.Primary)
+        )],
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
+    if (cid.startsWith('link_channel_modal_')) {
+      const serviceName = cid.replace('link_channel_modal_', '');
+      const raw = i.fields.getTextInputValue('channel_input').trim();
+      const clean = raw.replace(/[<#>]/g, '');
+
+      let targetChannel = i.guild.channels.cache.get(clean)
+        || i.guild.channels.cache.find(c => c.name.toLowerCase() === clean.toLowerCase());
+
+      if (!targetChannel) return i.reply({ content: `❌ Channel \`${raw}\` not found. Use \`#channel-name\` or the channel ID.`, flags: MessageFlags.Ephemeral });
+      if (targetChannel.type !== ChannelType.GuildText) return i.reply({ content: `❌ <#${targetChannel.id}> is not a text channel.`, flags: MessageFlags.Ephemeral });
+
+      const store = await getStoreData();
+      if (!store.serviceChannels) store.serviceChannels = {};
+      store.serviceChannels[serviceName] = targetChannel.id;
+      await saveStoreData(store);
+      await updateServiceShop(serviceName);
+
+      return i.reply({ content: `✅ Service **${serviceName}** linked to <#${targetChannel.id}> and shop embed placed!`, flags: MessageFlags.Ephemeral });
     }
 
     if (cid.startsWith('modal_add_product_')) {
@@ -1330,17 +1357,6 @@ client.on('interactionCreate', async (i) => {
   if (i.isStringSelectMenu()) {
     const userId = i.user.id;
     const cid = i.customId;
-
-    if (cid.startsWith('link_channel_to_service_')) {
-      const serviceName = cid.replace('link_channel_to_service_', '');
-      const channelId = i.values[0];
-      const store = await getStoreData();
-      if (!store.serviceChannels) store.serviceChannels = {};
-      store.serviceChannels[serviceName] = channelId;
-      await saveStoreData(store);
-      await updateServiceShop(serviceName);
-      return i.update({ content: `✅ Service **${serviceName}** linked to <#${channelId}> and shop embed placed!`, components: [] });
-    }
 
     if (cid === 'ticket_category_select') {
       const choice = i.values[0];
@@ -1698,12 +1714,6 @@ client.on('interactionCreate', async (i) => {
       const input1 = new TextInputBuilder().setCustomId('new_name').setLabel('New Service Name').setStyle(TextInputStyle.Short).setValue(service).setRequired(true);
       modal.addComponents(new ActionRowBuilder().addComponents(input1));
       await i.showModal(modal);
-      const channels = i.guild.channels.cache.filter(c => c.type === ChannelType.GuildText && c.id !== STORE_PANEL_CHANNEL_ID);
-      if (channels.size > 0) {
-        const menu = new StringSelectMenuBuilder().setCustomId(`link_channel_to_service_${service}`).setPlaceholder('Select a channel to link to this service')
-          .addOptions(channels.first(25).map(c => ({ label: c.name, value: c.id })));
-        await i.followUp({ content: `Link a text channel to **${service}** for the shop embed?`, components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
-      }
       return;
     }
 
@@ -1730,6 +1740,19 @@ client.on('interactionCreate', async (i) => {
 
   if (i.isButton()) {
     const cid = i.customId;
+
+    if (cid.startsWith('link_channel_btn_')) {
+      const serviceName = cid.replace('link_channel_btn_', '');
+      const modal = new ModalBuilder().setCustomId(`link_channel_modal_${serviceName}`).setTitle('Link Channel');
+      const input = new TextInputBuilder()
+        .setCustomId('channel_input')
+        .setLabel('Channel (e.g. #streaming)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('#channel-name or channel ID')
+        .setRequired(true);
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return i.showModal(modal);
+    }
 
     if (cid === 'store_add_section') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
