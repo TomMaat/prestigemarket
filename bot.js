@@ -65,7 +65,7 @@ const STAFF_ROLE_IDS = [
   MAIN_TAG_ROLE_ID
 ];
 const CLEAR_PRODUCTS_ROLE_ID = '1564415129955729418';
-const EDIT_CUSTOMER_ROLE_ID = '1564415129955729418'; // Alleen deze rol mag /editcustomer
+const EDIT_CUSTOMER_ROLE_ID = '1564415129955729418';
 
 // Spent Roles
 const SPENT_ROLES = [
@@ -428,8 +428,7 @@ function buildInviteRewardsEmbed() {
       `> Check your invites via **Check My Invites**.\n\n` +
       `**Rewards:**\n` +
       `> 🔥 **10 Valid Invites** → **1x 10% Discount**\n` +
-      `> 🔥 **20 Valid Invites** → **2x 10% Discount**\n` +
-      `> *(elke 10 geldige invites = 1x 10% discount)*\n\n` +
+      `> 🔥 **20 Valid Invites** → **2x 10% Discount**\n\n` +
       `**How to claim:**\n` +
       `> Open a ticket with a staff member and mention your reward.\n\n` +
       `-# We do not accept fake invites or bots. Invites from users who were previously in the server do not count.`
@@ -1205,6 +1204,7 @@ client.on('interactionCreate', async (i) => {
       const invites = await getUserInvites();
       const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
       const invitedList = (userData.invitedUsers || []).map(id => `<@${id}>`).join('\n') || '*Nobody*';
+      const availableRewards = Math.floor(userData.valid / 10);
 
       const embed = new EmbedBuilder()
         .setTitle(`📊 Invites for ${targetUser.tag}`)
@@ -1212,8 +1212,7 @@ client.on('interactionCreate', async (i) => {
         .setThumbnail(targetUser.displayAvatarURL())
         .addFields(
           { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
-          { name: 'Fake Invites', value: `${userData.fake || 0}`, inline: true },
-          { name: 'Rewarded (used)', value: `${userData.rewarded || 0}`, inline: true },
+          { name: 'Available Rewards', value: `${availableRewards}x 10%`, inline: true },
           { name: 'Invited Users', value: invitedList, inline: false }
         )
         .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
@@ -1545,13 +1544,11 @@ client.on('interactionCreate', async (i) => {
           }
         }
 
-        // Update customer spent
         const spent = await getCustomerSpent();
         spent[ticket.userId] = (spent[ticket.userId] || 0) + totalPrice;
         await saveCustomerSpent(spent);
         await updateCustomerOverview();
 
-        // Update customer tickets & history
         const customerTickets = await getCustomerTickets();
         customerTickets[ticket.userId] = (customerTickets[ticket.userId] || 0) + 1;
         await saveCustomerTickets(customerTickets);
@@ -1561,13 +1558,11 @@ client.on('interactionCreate', async (i) => {
         history[ticket.userId].push({ product: ticket.product, quantity: ticket.quantity, total: ticket.total });
         await saveCustomerHistory(history);
 
-        // Assign vouch role
         const member = await i.guild.members.fetch(ticket.userId).catch(() => null);
         if (member && !member.roles.cache.has(VOUCH_ROLE_ID)) {
           await member.roles.add(VOUCH_ROLE_ID).catch(() => console.log('Could not add vouch role'));
         }
 
-        // Assign spent roles
         if (member) {
           const newTotal = spent[ticket.userId];
           for (const role of SPENT_ROLES) {
@@ -2727,6 +2722,7 @@ client.on('interactionCreate', async (i) => {
     if (i.customId === 'invite_check') {
       const invites = await getUserInvites();
       const userData = invites[i.user.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
+      const availableRewards = Math.floor(userData.valid / 10);
       
       const embed = new EmbedBuilder()
         .setTitle('📊 Your Invites')
@@ -2734,8 +2730,7 @@ client.on('interactionCreate', async (i) => {
         .setThumbnail(i.user.displayAvatarURL())
         .addFields(
           { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
-          { name: 'Fake Invites', value: `${userData.fake || 0}`, inline: true },
-          { name: 'Rewarded (used)', value: `${userData.rewarded || 0}`, inline: true }
+          { name: 'Available Rewards', value: `${availableRewards}x 10%`, inline: true }
         )
         .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
         .setTimestamp();
