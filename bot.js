@@ -835,161 +835,68 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 // ===== Interaction Handler =====
 client.on('interactionCreate', async (i) => {
-  if (i.isChatInputCommand()) {
-    const name = i.commandName;
+  // Global safety net so a crash never leaves the user without a reply
+  const safeReply = async (content) => {
+    try {
+      if (i.deferred || i.replied) await i.editReply({ content });
+      else await i.reply({ content, flags: MessageFlags.Ephemeral });
+    } catch (_) {}
+  };
 
-    if (['payment', 'delivered', 'giveproduct'].includes(name) && !PAYMENT_COMMAND_ALLOWED_IDS.includes(i.user.id))
-      return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+  try {
+    if (i.isChatInputCommand()) {
+      const name = i.commandName;
+      console.log(`[CMD] ${name} by ${i.user.tag} (${i.user.id})`);
 
-    if (['changepaymentmethod', 'resetearned', 'userewards'].includes(name) && !isStaff(i.member))
-      return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+      if (['payment', 'delivered', 'giveproduct'].includes(name) && !PAYMENT_COMMAND_ALLOWED_IDS.includes(i.user.id))
+        return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
 
-    if (name === 'refresh') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const result = await refreshChannel(i.channel);
-      return i.editReply({ content: result ? `✅ Refreshed: **${result}**` : '❌ No panel/embed is configured for this channel.' });
-    }
+      if (['changepaymentmethod', 'resetearned', 'userewards'].includes(name) && !isStaff(i.member))
+        return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
 
-    if (name === 'search') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const targetUser = i.options.getUser('user');
-      const spent = await getCustomerSpent();
-      const tickets = await getCustomerTickets();
-      const history = await getCustomerHistory();
-      const totalSpent = spent[targetUser.id] || 0;
-      const ticketCount = tickets[targetUser.id] || 0;
-      const purchases = history[targetUser.id] || [];
-      const embed = new EmbedBuilder()
-        .setTitle(`🔍 Customer Stats for ${targetUser.tag}`).setColor(0x00ff88).setThumbnail(targetUser.displayAvatarURL())
-        .setDescription(`**Total Tickets:** ${ticketCount}\n**Total Spent:** €${totalSpent.toFixed(2)}\n\n**Purchases:**\n` +
-          (purchases.length ? purchases.map(p => `> ${buildVouchProductLabel(p)} - ${p.total}${p.sellerId ? ` (seller: <@${p.sellerId}>)` : ''}`).join('\n') : '*No purchases yet.*'))
-        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-      return i.editReply({ embeds: [embed] });
-    }
+      if (name === 'refresh') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const result = await refreshChannel(i.channel);
+        return i.editReply({ content: result ? `✅ Refreshed: **${result}**` : '❌ No panel/embed is configured for this channel.' });
+      }
 
-    if (name === 'checkinvites') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const targetUser = i.options.getUser('user');
-      const invites = await getUserInvites();
-      const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
-      const invitedList = (userData.invitedUsers || []).map(id => `<@${id}>`).join('\n') || '*Nobody*';
-      const tens = Math.floor(userData.valid / 10);
-      const fives = Math.floor((userData.valid % 10) / 5);
-      const rewardText = `${tens > 0 ? `${tens}x 10%` : ''} ${fives > 0 ? `${fives}x 5%` : ''}`.trim() || '0';
-      const embed = new EmbedBuilder()
-        .setTitle(`📊 Invites for ${targetUser.tag}`).setColor(0xffaa00).setThumbnail(targetUser.displayAvatarURL())
-        .addFields(
-          { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
-          { name: 'Available Rewards', value: rewardText, inline: true },
-          { name: 'Invited Users', value: invitedList, inline: false }
-        ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-      return i.editReply({ embeds: [embed] });
-    }
+      if (name === 'vouch') {
+        console.log(`[VOUCH] start - user: ${i.user.id}, hasVouchRole: ${i.member?.roles.cache.has(VOUCH_ROLE_ID)}`);
+        await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
 
-    if (name === 'editcustomer') {
-      if (!i.member.roles.cache.has(EDIT_CUSTOMER_ROLE_ID)) return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const targetUser = i.options.getUser('user');
-      const spentAmount = parseFloat(i.options.getString('spent').replace(',', '.').replace('€', '').trim());
-      if (isNaN(spentAmount) || spentAmount < 0) return i.editReply({ content: '❌ Invalid amount. Use `0,75` or `5.50`.' });
-      const spent = await getCustomerSpent();
-      const oldAmount = spent[targetUser.id] || 0;
-      spent[targetUser.id] = spentAmount;
-      await saveCustomerSpent(spent);
-      await updateCustomerOverview();
-      await sendLog('✏️ Customer Edited', `<@${i.user.id}> changed <@${targetUser.id}>'s spent from **€${oldAmount.toFixed(2)}** to **€${spentAmount.toFixed(2)}**.`, 0xffaa00);
-      return i.editReply({ content: `✅ Updated <@${targetUser.id}> spent from **€${oldAmount.toFixed(2)}** to **€${spentAmount.toFixed(2)}**.` });
-    }
+        if (!i.member || !i.member.roles.cache.has(VOUCH_ROLE_ID)) {
+          return safeReply(`❌ You need the <@&${VOUCH_ROLE_ID}> role to use this command.`);
+        }
 
-    if (name === 'userewards') {
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const targetUser = i.options.getUser('user');
-      const reward = i.options.getString('reward');
-      const invites = await getUserInvites();
-      const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
-      const required = reward === '5' ? 5 : 10;
-      if (userData.valid < required) return i.editReply({ content: `❌ ${targetUser.username} has only **${userData.valid}** valid invites, needs **${required}** for the **${reward}%** reward.` });
-      userData.valid -= required;
-      userData.rewarded = (userData.rewarded || 0) + 1;
-      invites[targetUser.id] = userData;
-      await saveUserInvites(invites);
-      const rewards = await getUserRewards();
-      if (!rewards[targetUser.id]) rewards[targetUser.id] = [];
-      rewards[targetUser.id].push({ percent: parseInt(reward), claimedAt: Date.now() });
-      await saveUserRewards(rewards);
-      await updateInviteOverview();
-      await sendLog('🎁 Reward Claimed', `<@${targetUser.id}> claimed a **${reward}%** discount reward.`, 0x00ff88);
-      return i.editReply({ content: `✅ Reward of **${reward}%** claimed for ${targetUser.username}!` });
-    }
+        let history;
+        try {
+          history = await getCustomerHistory();
+        } catch (e) {
+          console.error('[VOUCH] history fetch error:', e);
+          return safeReply(`❌ Could not load your purchases. Please try again later.`);
+        }
 
-    if (name === 'clear') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const amount = i.options.getInteger('amount');
-      try { await i.channel.bulkDelete(amount, true); return i.reply({ content: `✅ Cleared **${amount}** messages.`, flags: MessageFlags.Ephemeral }); }
-      catch (e) { return i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
-    }
+        const purchases = history[i.user.id] || [];
+        console.log(`[VOUCH] purchases found: ${purchases.length}`);
+        if (!purchases.length) return safeReply('❌ You have no purchases yet. You can only vouch after buying something.');
 
-    if (name === 'clearallproducts') {
-      if (!i.member.roles.cache.has(CLEAR_PRODUCTS_ROLE_ID)) return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      await saveStoreData({ sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null, serviceChannels: {}, serviceMessages: {} });
-      await updateStorePanel();
-      return i.editReply({ content: '✅ All products, services, and sections cleared!' });
-    }
+        const last = purchases[purchases.length - 1];
+        console.log(`[VOUCH] last purchase:`, JSON.stringify(last));
 
-    if (name === 'giveaway') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const winners = i.options.getInteger('winners');
-      const product = i.options.getString('product');
-      const duration = parseDuration(i.options.getString('time'));
-      if (!duration) return i.editReply({ content: '❌ Invalid time format. Use `10m`, `1h`, `1d`, etc.' });
-      const blacklistRoles = (i.options.getString('blacklist_roles') || '').split(/\s+/).map(r => r.replace(/[<@&>]/g, '')).filter(Boolean);
-      const ch = await client.channels.fetch(GIVEAWAY_CHANNEL_ID).catch(() => null);
-      if (!ch) return i.editReply({ content: '❌ Giveaway channel not found.' });
-      await runGiveaway(ch, winners, product, duration, blacklistRoles);
-      return i.editReply({ content: `✅ Giveaway started in <#${GIVEAWAY_CHANNEL_ID}>!` });
-    }
+        const extra = i.options.getString('extra') || 'Great service!';
+        const productLabel = buildVouchProductLabel(last);
+        const sellerId = last.sellerId || null;
 
-    if (name === 'setupstore') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      await setupStorePanel();
-      return i.editReply({ content: '✅ Store panel placed!' });
-    }
-
-    if (name === 'resetearned') {
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const oldEarnings = await getEarnings();
-      const fields = [{ name: 'Old Earnings', value:
-        `<@${EARNER_1_ID}>: €${(oldEarnings[EARNER_1_ID] || 0).toFixed(2)}\n<@${EARNER_2_ID}>: €${(oldEarnings[EARNER_2_ID] || 0).toFixed(2)}\n<@${EARNER_3_ID}>: €${(oldEarnings[EARNER_3_ID] || 0).toFixed(2)}\n<@${EARNER_4_ID}>: €${(oldEarnings[EARNER_4_ID] || 0).toFixed(2)}` }];
-      await saveEarnings({ [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 });
-      await updateEarningsPanel();
-      await sendLog('🔄 Earnings Reset', `All earnings reset to **€0.00** by <@${i.user.id}>.`, 0xffaa00, fields);
-      return i.editReply({ content: '✅ Earnings reset to 0 for all users.' });
-    }
-
-    if (name === 'vouch') {
-      if (!i.member.roles.cache.has(VOUCH_ROLE_ID)) return i.reply({ content: `❌ You need the <@&${VOUCH_ROLE_ID}> role to use this command.`, flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-
-      const history = await getCustomerHistory();
-      const purchases = history[i.user.id] || [];
-      if (!purchases.length) return i.editReply({ content: '❌ You have no purchases yet. You can only vouch after buying something.' });
-
-      const last = purchases[purchases.length - 1];
-      const extra = i.options.getString('extra') || 'Great service!';
-      const productLabel = buildVouchProductLabel(last);
-      const sellerId = last.sellerId || null;
-
-      try {
         const ch = await client.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
-        if (!ch) return i.editReply({ content: '❌ Vouch channel not found.' });
+        if (!ch) return safeReply('❌ Vouch channel not found. Please contact staff.');
+
         let nummer = 1;
-        try { nummer = (await readVouchCounter()) + 1; await writeVouchCounter(nummer); cachedVouches = nummer; } catch (e) {}
+        try {
+          nummer = (await readVouchCounter()) + 1;
+          await writeVouchCounter(nummer);
+          cachedVouches = nummer;
+        } catch (e) { console.error('[VOUCH] counter error:', e.message); }
 
         const embed = new EmbedBuilder()
           .setTitle(`Vouch #${nummer}`).setColor(0x00ff88).setThumbnail(LOGO)
@@ -1001,1069 +908,1200 @@ client.on('interactionCreate', async (i) => {
             { name: 'Extra', value: extra, inline: false }
           ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
 
-        await ch.send({ embeds: [embed] });
-        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**${sellerId ? ` (seller: <@${sellerId}>)` : ''}.`, 0x00ff88);
-        try { await i.user.send({ content: `✅ Your vouch for **${productLabel}** has been posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (err) {}
-        return i.editReply({ content: `✅ Vouch posted for **${productLabel}**!` });
-      } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
-    }
-
-    if (name === 'ticketpanel') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      await setupTicketPanel();
-      return i.editReply({ content: '✅ Ticket panel placed!' });
-    }
-
-    if (name === 'refreshverify') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      await setupVerify();
-      return i.editReply({ content: '✅ Verify message refreshed!' });
-    }
-
-    if (name === 'removekruis') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const amount = i.options.getInteger('amount');
-      try {
-        const votes = await getLegitVotes();
-        if (!votes.reject.length) return i.editReply({ content: '⚠️ No crosses to remove.' });
-        const toRemove = Math.min(amount, votes.reject.length);
-        votes.reject.splice(votes.reject.length - toRemove, toRemove);
-        await saveLegitVotes(votes);
-        await setupLegit();
-        return i.editReply({ content: `✅ Removed **${toRemove}** crosses.` });
-      } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
-    }
-
-    if (name === 'restock') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const product = i.options.getString('product');
-      const service = i.options.getString('service');
-      const extra = i.options.getString('extra');
-      if (!product && !service) return i.editReply({ content: '❌ Provide either a `product` or a `service`.' });
-      if (product && service) return i.editReply({ content: '❌ Provide only **one** of `product` or `service`, not both.' });
-      const ch = await client.channels.fetch(RESTOCK_CHANNEL_ID).catch(() => null);
-      if (!ch) return i.editReply({ content: '❌ Restock channel not found.' });
-      const embed = new EmbedBuilder().setTitle('📦 Restock Alert!').setColor(0x00ff88).setThumbnail(LOGO).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-      if (product) {
-        embed.setDescription(`A product has been restocked!\n\n**Product:** ${product}\n` + (extra ? `**Extra:** ${extra}\n\n` : '\n') + `Get it now before it's gone! 🛒`);
-      } else {
-        const store = await getStoreData();
-        const channelId = store.serviceChannels?.[service];
-        embed.setDescription(`A service has been restocked!\n\n**Service:** ${service}\n**Channel:** ${channelId ? `<#${channelId}>` : '*No channel linked*'}\n` + (extra ? `**Extra:** ${extra}\n\n` : '\n') + `Check it out now! 🛒`);
-      }
-      await ch.send({ content: `<@&${VERIFIED_ROLE_ID}>`, embeds: [embed] });
-      await sendLog('📦 Restock', `<@${i.user.id}> restocked ${product ? `**${product}**` : `service **${service}**`}.${extra ? ` Extra: ${extra}` : ''}`, 0x00ff88);
-      return i.editReply({ content: '✅ Restock notification sent!' });
-    }
-
-    const ticket = (await getTickets())[i.channelId];
-
-    if (name === 'payment') {
-      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
-      const method = ticket.payment || 'ideal';
-      const methodName = PAYMENT_METHODS[method] || 'Unknown';
-      const linkOrCrypto = i.options.getString('link_or_crypto');
-      const bankAccountNumber = i.options.getString('bank_account_number');
-      const accountName = i.options.getString('account_name');
-      const embed = new EmbedBuilder()
-        .setTitle('💳 Payment Information').setColor(0x2ecc71)
-        .setDescription(`Please complete your payment using the details below.\n\n**Method:** ${methodName}`)
-        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-      if (method === 'bank') {
-        if (!bankAccountNumber || !accountName) return i.reply({ content: '❌ For Bank Transfer provide both `bank_account_number` and `account_name`.', flags: MessageFlags.Ephemeral });
-        embed.addFields(
-          { name: 'Bank Account (IBAN)', value: `\`${bankAccountNumber}\``, inline: false },
-          { name: 'Account Name', value: `\`${accountName}\``, inline: false }
-        );
-      } else if (method === 'crypto') {
-        if (!linkOrCrypto) return i.reply({ content: '❌ For Crypto provide a `link_or_crypto` (crypto address).', flags: MessageFlags.Ephemeral });
-        embed.addFields({ name: 'Crypto Address (LTC)', value: `\`${linkOrCrypto}\``, inline: false });
-      } else {
-        if (!linkOrCrypto) return i.reply({ content: '❌ For this method provide a `link_or_crypto`.', flags: MessageFlags.Ephemeral });
-        embed.addFields({ name: 'Payment Link', value: linkOrCrypto, inline: false });
-      }
-      return i.reply({ embeds: [embed] });
-    }
-
-    if (name === 'giveproduct') {
-      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
-      const store = await getStoreData();
-      const prodData = store.products[ticket.product];
-      if (!prodData) return i.reply({ content: '❌ Product not found in store data.', flags: MessageFlags.Ephemeral });
-      if (prodData.amount) return i.reply({ content: '❌ This command only works for Single Price products.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const loginList = i.options.getString('logins').trim().split(/\s+/).map((l, idx) => `${idx + 1}. \`${l}\``).join('\n');
-      const dmEmbed = new EmbedBuilder()
-        .setTitle('✅ Your Product Delivery').setColor(0x00ff88)
-        .setDescription(`Thank you for your purchase at **Prestige Market**!\n\nYour account details for **${ticket.product}**:\n\n${loginList}`)
-        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-      const ticketEmbed = new EmbedBuilder()
-        .setTitle('📦 Product Delivered').setColor(0x00ff88)
-        .setDescription(`Product delivered to <@${ticket.userId}>.\n\n**Product:** ${ticket.product}\n**Logins:**\n${loginList}`)
-        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-      try {
-        const targetUser = await client.users.fetch(ticket.userId);
-        await targetUser.send({ embeds: [dmEmbed] }).catch(() => console.log('Could not DM user'));
-        await i.channel.send({ embeds: [ticketEmbed] });
-        await sendLog('📦 Product Given', `<@${i.user.id}> gave **${ticket.product}** to <@${ticket.userId}> in <#${i.channelId}>.`, 0x00ff88);
-        return i.editReply({ content: '✅ Product delivered to the customer!' });
-      } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
-    }
-
-    if (name === 'changepaymentmethod') {
-      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
-      const menu = new StringSelectMenuBuilder().setCustomId('change_payment_method').setPlaceholder('Select a new payment method')
-        .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key, emoji: PAYMENT_EMOJIS[key] })));
-      return i.reply({ content: 'Select the new payment method:', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
-    }
-
-    if (name === 'delivered') {
-      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      try {
-        const store = await getStoreData();
-        const prodData = store.products[ticket.product];
-        let profit = 0;
-        const totalPrice = parsePrice(ticket.total);
-        if (prodData) profit = calculateProfit(totalPrice, ticket.quantity, prodData);
-        if (profit !== 0 && PAYMENT_COMMAND_ALLOWED_IDS.includes(i.user.id)) {
-          const earnings = await getEarnings();
-          earnings[i.user.id] = (earnings[i.user.id] || 0) + profit;
-          await saveEarnings(earnings);
-          await updateEarningsPanel();
+        try {
+          await ch.send({ embeds: [embed] });
+        } catch (e) {
+          console.error('[VOUCH] send to channel error:', e);
+          return safeReply(`❌ Could not post the vouch. Please contact staff.`);
         }
+
+        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**${sellerId ? ` (seller: <@${sellerId}>)` : ''}.`, 0x00ff88);
+        try { await i.user.send({ content: `✅ Your vouch for **${productLabel}** has been posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (_) {}
+
+        console.log(`[VOUCH] success - vouch #${nummer}`);
+        return safeReply(`✅ Vouch posted for **${productLabel}**!`);
+      }
+
+      if (name === 'search') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const targetUser = i.options.getUser('user');
         const spent = await getCustomerSpent();
-        spent[ticket.userId] = (spent[ticket.userId] || 0) + totalPrice;
+        const tickets = await getCustomerTickets();
+        const history = await getCustomerHistory();
+        const totalSpent = spent[targetUser.id] || 0;
+        const ticketCount = tickets[targetUser.id] || 0;
+        const purchases = history[targetUser.id] || [];
+        const embed = new EmbedBuilder()
+          .setTitle(`🔍 Customer Stats for ${targetUser.tag}`).setColor(0x00ff88).setThumbnail(targetUser.displayAvatarURL())
+          .setDescription(`**Total Tickets:** ${ticketCount}\n**Total Spent:** €${totalSpent.toFixed(2)}\n\n**Purchases:**\n` +
+            (purchases.length ? purchases.map(p => `> ${buildVouchProductLabel(p)} - ${p.total}${p.sellerId ? ` (seller: <@${p.sellerId}>)` : ''}`).join('\n') : '*No purchases yet.*'))
+          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+        return i.editReply({ embeds: [embed] });
+      }
+
+      if (name === 'checkinvites') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const targetUser = i.options.getUser('user');
+        const invites = await getUserInvites();
+        const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
+        const invitedList = (userData.invitedUsers || []).map(id => `<@${id}>`).join('\n') || '*Nobody*';
+        const tens = Math.floor(userData.valid / 10);
+        const fives = Math.floor((userData.valid % 10) / 5);
+        const rewardText = `${tens > 0 ? `${tens}x 10%` : ''} ${fives > 0 ? `${fives}x 5%` : ''}`.trim() || '0';
+        const embed = new EmbedBuilder()
+          .setTitle(`📊 Invites for ${targetUser.tag}`).setColor(0xffaa00).setThumbnail(targetUser.displayAvatarURL())
+          .addFields(
+            { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
+            { name: 'Available Rewards', value: rewardText, inline: true },
+            { name: 'Invited Users', value: invitedList, inline: false }
+          ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+        return i.editReply({ embeds: [embed] });
+      }
+
+      if (name === 'editcustomer') {
+        if (!i.member.roles.cache.has(EDIT_CUSTOMER_ROLE_ID)) return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const targetUser = i.options.getUser('user');
+        const spentAmount = parseFloat(i.options.getString('spent').replace(',', '.').replace('€', '').trim());
+        if (isNaN(spentAmount) || spentAmount < 0) return i.editReply({ content: '❌ Invalid amount. Use `0,75` or `5.50`.' });
+        const spent = await getCustomerSpent();
+        const oldAmount = spent[targetUser.id] || 0;
+        spent[targetUser.id] = spentAmount;
         await saveCustomerSpent(spent);
         await updateCustomerOverview();
-        const customerTickets = await getCustomerTickets();
-        customerTickets[ticket.userId] = (customerTickets[ticket.userId] || 0) + 1;
-        await saveCustomerTickets(customerTickets);
-        const history = await getCustomerHistory();
-        if (!history[ticket.userId]) history[ticket.userId] = [];
-        const prodInfo = store.products[ticket.product] || {};
-        history[ticket.userId].push({
-          product: ticket.product,
-          quantity: ticket.quantity,
-          total: ticket.total,
-          unit: prodInfo.amount || null,
-          sellerId: i.user.id,
-          deliveredAt: Date.now()
-        });
-        await saveCustomerHistory(history);
-        const member = await i.guild.members.fetch(ticket.userId).catch(() => null);
-        if (member) {
-          if (!member.roles.cache.has(VOUCH_ROLE_ID)) await member.roles.add(VOUCH_ROLE_ID).catch(() => {});
-          const newTotal = spent[ticket.userId];
-          for (const role of SPENT_ROLES) if (newTotal >= role.amount && !member.roles.cache.has(role.roleId)) await member.roles.add(role.roleId).catch(() => {});
-        }
-        const recentChannel = await client.channels.fetch(RECENT_PAYMENTS_CHANNEL_ID).catch(() => null);
-        if (recentChannel) {
-          const paymentEmbed = new EmbedBuilder().setTitle('💸 Recent Payment').setColor(0x00ff88)
-            .setDescription(`**Delivered by:** <@${i.user.id}>\n**Customer:** <@${ticket.userId}>\n**Product:** ${ticket.product} (${ticket.quantity}x)\n**Total:** ${ticket.total}\n**Profit:** €${profit.toFixed(2)}`)
-            .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-          await recentChannel.send({ embeds: [paymentEmbed] });
-        }
-        await i.channel.setParent(ARCHIVE_CATEGORY_ID, { lockPermissions: false });
-        const t = await getTickets();
-        if (t[i.channelId]) { t[i.channelId].categorie = 'archived'; await saveTickets(t); }
-        const targetUser = await client.users.fetch(ticket.userId).catch(() => null);
-        if (targetUser) {
-          const dmEmbed = new EmbedBuilder().setTitle('Thank you for your purchase!').setColor(0x00ff88)
-            .setDescription(`Thank you for your purchase at **Prestige Market**!\n\nPlease consider leaving a vouch in <#${VOUCH_CHANNEL_ID}> to support us.`)
-            .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-          const vouchButton = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setLabel('Leave a Vouch').setStyle(ButtonStyle.Link).setURL(`https://discord.com/channels/${GUILD_ID}/${VOUCH_CHANNEL_ID}`)
-          );
-          await targetUser.send({ embeds: [dmEmbed], components: [vouchButton] }).catch(() => console.log('Could not DM user'));
-        }
-        await i.channel.send({ content: `✅ Order delivered! Ticket moved to archive. Thank you for your purchase, <@${ticket.userId}>!` });
-        await sendLog('📦 Order Delivered', `Order for <@${ticket.userId}> in <#${i.channelId}> marked as delivered by <@${i.user.id}>.`, 0x00ff88);
-        return i.editReply({ content: '✅ Ticket archived and user notified.' });
-      } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
-    }
-
-    if (name === 'close') {
-      if (!isStaff(i.member) && (!ticket || ticket.userId !== i.user.id)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
-      await i.reply({ content: '🔒 Closing ticket...' });
-      return await closeTicket(i.channel, i.user.id);
-    }
-
-    if (name === 'add' || name === 'remove') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const targetUser = i.options.getUser('user');
-      try {
-        if (name === 'add') {
-          await i.channel.permissionOverwrites.edit(targetUser.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true, AttachFiles: true });
-          await i.channel.send({ content: `➕ <@${targetUser.id}> has been added by <@${i.user.id}>.` });
-        } else {
-          await i.channel.permissionOverwrites.delete(targetUser.id);
-          await i.channel.send({ content: `➖ <@${targetUser.id}> has been removed by <@${i.user.id}>.` });
-        }
-        await i.editReply({ content: '✅ Success.' });
-      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
-      return;
-    }
-
-    if (name === 'rename') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const newName = i.options.getString('name').toLowerCase().replace(/[^a-z0-9-]/g, '-');
-      try { await i.channel.setName(newName); await i.editReply({ content: `✅ Renamed to ${newName}.` }); }
-      catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
-      return;
-    }
-
-    if (name === 'move') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
-      const menu = new StringSelectMenuBuilder().setCustomId('move_ticket_select').setPlaceholder('Choose a category...')
-        .addOptions(Object.entries(ALLOWED_MOVE_CATEGORIES).map(([id, name]) => ({ label: name, value: id })));
-      return i.reply({ content: 'Choose the category to move this ticket to:', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
-    }
-  }
-
-  if (i.isModalSubmit()) {
-    const cid = i.customId;
-
-    if (cid === 'modal_add_section') {
-      const name = i.fields.getTextInputValue('section_name');
-      const store = await getStoreData();
-      if (!store.sections[name]) store.sections[name] = [];
-      store.lastSection = name;
-      await saveStoreData(store);
-      await updateStorePanel();
-      return i.reply({ content: `✅ Section **${name}** added.`, flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid.startsWith('modal_add_service_')) {
-      const section = cid.replace('modal_add_service_', '');
-      const name = i.fields.getTextInputValue('service_name');
-      const store = await getStoreData();
-      if (!store.sections[section]) return i.reply({ content: '❌ Section not found.', flags: MessageFlags.Ephemeral });
-      if (!store.sections[section].includes(name)) store.sections[section].push(name);
-      if (!store.services[name]) store.services[name] = [];
-      store.lastService = name;
-      await saveStoreData(store);
-      await updateStorePanel();
-      return i.reply({
-        content: `✅ Service **${name}** added to **${section}**.\n\nClick the button below to link a text channel to this service shop (you can type \`#channel\`).`,
-        components: [new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`link_channel_btn_${name}`).setLabel('Link Channel').setEmoji('🔗').setStyle(ButtonStyle.Primary)
-        )],
-        flags: MessageFlags.Ephemeral
-      });
-    }
-
-    if (cid.startsWith('link_channel_modal_')) {
-      const serviceName = cid.replace('link_channel_modal_', '');
-      const raw = i.fields.getTextInputValue('channel_input').trim();
-      const clean = raw.replace(/[<#>]/g, '');
-
-      let targetChannel = i.guild.channels.cache.get(clean)
-        || i.guild.channels.cache.find(c => c.name.toLowerCase() === clean.toLowerCase());
-
-      if (!targetChannel) return i.reply({ content: `❌ Channel \`${raw}\` not found. Use \`#channel-name\` or the channel ID.`, flags: MessageFlags.Ephemeral });
-      if (targetChannel.type !== ChannelType.GuildText) return i.reply({ content: `❌ <#${targetChannel.id}> is not a text channel.`, flags: MessageFlags.Ephemeral });
-
-      const store = await getStoreData();
-      if (!store.serviceChannels) store.serviceChannels = {};
-      store.serviceChannels[serviceName] = targetChannel.id;
-      await saveStoreData(store);
-      await updateServiceShop(serviceName);
-
-      return i.reply({ content: `✅ Service **${serviceName}** linked to <#${targetChannel.id}> and shop embed placed!`, flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid.startsWith('modal_add_product_')) {
-      const service = cid.replace('modal_add_product_', '');
-      const name = i.fields.getTextInputValue('product_name');
-      const store = await getStoreData();
-      if (!store.services[service]) return i.reply({ content: '❌ Service not found.', flags: MessageFlags.Ephemeral });
-      if (!store.services[service].includes(name)) store.services[service].push(name);
-      if (!store.products[name]) store.products[name] = {};
-      store.lastProduct = name;
-      await saveStoreData(store);
-      await updateStorePanel();
-      if (store.serviceChannels?.[service]) await updateServiceShop(service);
-      return i.reply({ content: `✅ Product **${name}** added to **${service}**.`, flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid.startsWith('modal_add_price_single_')) {
-      const product = cid.replace('modal_add_price_single_', '');
-      const price = i.fields.getTextInputValue('product_price');
-      const buyCost = i.fields.getTextInputValue('product_buy_cost');
-      const store = await getStoreData();
-      if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
-      store.products[product].price = price;
-      store.products[product].amount = '';
-      if (buyCost) store.products[product].buyCost = buyCost;
-      await saveStoreData(store);
-      await updateStorePanel();
-      return i.reply({ content: `✅ Single price for **${product}** set to **${formatPrice(price)}**. Buy cost: €${buyCost || 0}.`, flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid.startsWith('modal_add_price_amount_')) {
-      const product = cid.replace('modal_add_price_amount_', '');
-      const price = i.fields.getTextInputValue('product_price');
-      const amount = i.fields.getTextInputValue('product_amount');
-      const buyCost = i.fields.getTextInputValue('product_buy_cost');
-      const store = await getStoreData();
-      if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
-      store.products[product].price = price;
-      store.products[product].amount = amount;
-      if (buyCost) store.products[product].buyCost = buyCost;
-      await saveStoreData(store);
-      await updateStorePanel();
-      return i.reply({ content: `✅ Price for **${product}** set to **${formatPrice(price)}** per **${amount}**. Buy cost: €${buyCost || 0}.`, flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid.startsWith('modal_purchase_amount_')) {
-      const product = cid.replace('modal_purchase_amount_', '');
-      const quantity = parseInt(i.fields.getTextInputValue('quantity'));
-      if (isNaN(quantity) || quantity <= 0) return i.reply({ content: '❌ Invalid quantity. Enter a number.', flags: MessageFlags.Ephemeral });
-      const store = await getStoreData();
-      const prodData = store.products[product];
-      if (!prodData || !prodData.price || prodData.price === 'N/A') return i.reply({ content: '❌ Price not set for this product.', flags: MessageFlags.Ephemeral });
-      const pricePer = parseFloat(prodData.price.toString().replace('€', '').replace(',', '.').trim());
-      const amountPer = prodData.amount ? parseInt(prodData.amount) : 1;
-      const total = ((pricePer / amountPer) * quantity).toFixed(2).replace('.', ',');
-      const formattedTotal = `€${total}`;
-      const data = pendingPurchases.get(i.user.id);
-      if (!data) return i.reply({ content: '❌ Session expired.', flags: MessageFlags.Ephemeral });
-      data.product = product; data.quantity = quantity; data.total = formattedTotal;
-      const menu = new StringSelectMenuBuilder().setCustomId('purchase_payment').setPlaceholder('Select payment method')
-        .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key, emoji: PAYMENT_EMOJIS[key] })));
-      return i.update({ content: `You want **${quantity}** of **${product}**. Total: **${formattedTotal}**.\n\nSelect your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
-    }
-
-    if (cid.startsWith('modal_create_ticket_')) {
-      const category = cid.replace('modal_create_ticket_', '');
-      const cat = TICKET_CATEGORIES[category];
-      if (!cat) return i.reply({ content: '❌ Unknown category.', flags: MessageFlags.Ephemeral });
-      const questionAnswer = i.fields.getTextInputValue('question_answer');
-      const questionAnswer2 = category === 'partner' ? i.fields.getTextInputValue('question_answer_2') : null;
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      try {
-        const guild = i.guild;
-        const tickets = await getTickets();
-        if (Object.values(tickets).find(t => t.userId === i.user.id)) return i.editReply({ content: '❌ You already have an open ticket.' });
-        const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
-        const overwrites = [
-          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
-          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
-          { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
-        ];
-        const ticketChannel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}` });
-        await addTicket(ticketChannel.id, i.user.id, category);
-        const customerTickets = await getCustomerTickets();
-        customerTickets[i.user.id] = (customerTickets[i.user.id] || 0) + 1;
-        await saveCustomerTickets(customerTickets);
-        const stats = await getTicketStats();
-        stats.total += 1;
-        await saveTicketStats(stats);
-        await updateTicketStats();
-        const embed = new EmbedBuilder().setTitle(cat.name).setColor(cat.color)
-          .setDescription(`<@${i.user.id}> — Thank you for opening a ticket. Please wait for a staff member to assist you.`)
-          .addFields({ name: 'Your Answer', value: questionAnswer }).setTimestamp();
-        if (questionAnswer2) embed.addFields({ name: 'Second Answer', value: questionAnswer2 });
-        const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-        await ticketChannel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
-        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
-      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
-      return;
-    }
-
-    if (cid.startsWith('edit_service_modal_')) {
-      const oldName = cid.replace('edit_service_modal_', '');
-      const newName = i.fields.getTextInputValue('new_name');
-      const store = await getStoreData();
-      if (!store.services[oldName]) return i.reply({ content: '❌ Service not found.', flags: MessageFlags.Ephemeral });
-      for (const list of Object.values(store.sections)) {
-        const idx = list.indexOf(oldName);
-        if (idx !== -1) list[idx] = newName;
+        await sendLog('✏️ Customer Edited', `<@${i.user.id}> changed <@${targetUser.id}>'s spent from **€${oldAmount.toFixed(2)}** to **€${spentAmount.toFixed(2)}**.`, 0xffaa00);
+        return i.editReply({ content: `✅ Updated <@${targetUser.id}> spent from **€${oldAmount.toFixed(2)}** to **€${spentAmount.toFixed(2)}**.` });
       }
-      store.services[newName] = store.services[oldName];
-      delete store.services[oldName];
-      if (store.serviceChannels?.[oldName]) { store.serviceChannels[newName] = store.serviceChannels[oldName]; delete store.serviceChannels[oldName]; }
-      if (store.serviceMessages?.[oldName]) { store.serviceMessages[newName] = store.serviceMessages[oldName]; delete store.serviceMessages[oldName]; }
-      await saveStoreData(store);
-      await updateStorePanel();
-      if (store.serviceChannels?.[newName]) await updateServiceShop(newName);
-      return i.reply({ content: `✅ Service **${oldName}** renamed to **${newName}**.`, flags: MessageFlags.Ephemeral });
-    }
 
-    if (cid.startsWith('edit_price_modal_')) {
-      const product = cid.replace('edit_price_modal_', '');
-      const price = i.fields.getTextInputValue('product_price');
-      const amount = i.fields.getTextInputValue('product_amount');
-      const buyCost = i.fields.getTextInputValue('product_buy_cost');
-      const store = await getStoreData();
-      if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
-      store.products[product].price = price;
-      store.products[product].amount = amount;
-      if (buyCost) store.products[product].buyCost = buyCost;
-      await saveStoreData(store);
-      await updateStorePanel();
-      return i.reply({ content: `✅ Price for **${product}** updated.`, flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid.startsWith('giveaway_reroll_modal_')) {
-      const messageId = cid.replace('giveaway_reroll_modal_', '');
-      const amount = parseInt(i.fields.getTextInputValue('reroll_amount'));
-      if (isNaN(amount) || amount <= 0) return i.reply({ content: '❌ Invalid amount.', flags: MessageFlags.Ephemeral });
-      const giveaways = await getGiveaways();
-      const giveaway = giveaways[messageId];
-      if (!giveaway) return i.reply({ content: '❌ Giveaway not found.', flags: MessageFlags.Ephemeral });
-      const filtered = (giveaway.participants || []).filter(id => !giveaway.winnersList.includes(id));
-      if (!filtered.length) return i.reply({ content: '❌ No new participants to reroll from.', flags: MessageFlags.Ephemeral });
-      const newWinners = filtered.sort(() => Math.random() - 0.5).slice(0, amount);
-      giveaway.winnersList = newWinners;
-      await saveGiveaways(giveaways);
-      const winnerMentions = newWinners.map(id => `<@${id}>`).join(', ');
-      const resultEmbed = new EmbedBuilder().setTitle('🔄 Giveaway Rerolled 🔄').setColor(0xffaa00)
-        .setDescription(`**Prize:** ${giveaway.product}\n**New Winners:** ${winnerMentions}\n\nCongratulations!`)
-        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-      await i.channel.send({ content: `🔄 Rerolled! Congratulations ${winnerMentions}!`, embeds: [resultEmbed] });
-      return i.reply({ content: '✅ Winners rerolled!', flags: MessageFlags.Ephemeral });
-    }
-  }
-
-  if (i.isStringSelectMenu()) {
-    const userId = i.user.id;
-    const cid = i.customId;
-
-    if (cid === 'ticket_category_select') {
-      const choice = i.values[0];
-      const cat = TICKET_CATEGORIES[choice];
-      if (!cat) return i.reply({ content: '❌ Unknown category.', flags: MessageFlags.Ephemeral });
-
-      if (choice === 'purchase') {
+      if (name === 'userewards') {
         await i.deferReply({ flags: MessageFlags.Ephemeral });
-        const store = await getStoreData();
-        const sections = Object.keys(store.sections);
-        if (!sections.length) return i.editReply({ content: '❌ No store sections configured yet. Please contact staff.' });
-        pendingPurchases.set(userId, { section: null, service: null, product: null, quantity: null, total: null, payment: null });
-        const menu = new StringSelectMenuBuilder().setCustomId('purchase_section').setPlaceholder('Select a section')
-          .addOptions(sections.map(s => ({ label: s, value: s })));
-        return i.editReply({ content: 'Which section do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
+        const targetUser = i.options.getUser('user');
+        const reward = i.options.getString('reward');
+        const invites = await getUserInvites();
+        const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
+        const required = reward === '5' ? 5 : 10;
+        if (userData.valid < required) return i.editReply({ content: `❌ ${targetUser.username} has only **${userData.valid}** valid invites, needs **${required}** for the **${reward}%** reward.` });
+        userData.valid -= required;
+        userData.rewarded = (userData.rewarded || 0) + 1;
+        invites[targetUser.id] = userData;
+        await saveUserInvites(invites);
+        const rewards = await getUserRewards();
+        if (!rewards[targetUser.id]) rewards[targetUser.id] = [];
+        rewards[targetUser.id].push({ percent: parseInt(reward), claimedAt: Date.now() });
+        await saveUserRewards(rewards);
+        await updateInviteOverview();
+        await sendLog('🎁 Reward Claimed', `<@${targetUser.id}> claimed a **${reward}%** discount reward.`, 0x00ff88);
+        return i.editReply({ content: `✅ Reward of **${reward}%** claimed for ${targetUser.username}!` });
       }
 
-      if (choice === 'support' || choice === 'bug') {
-        const modal = new ModalBuilder().setCustomId(`modal_create_ticket_${choice}`).setTitle(`${cat.name} Ticket`);
-        const input = new TextInputBuilder().setCustomId('question_answer').setLabel('Describe your issue / question').setStyle(TextInputStyle.Paragraph).setRequired(true);
+      if (name === 'clear') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        const amount = i.options.getInteger('amount');
+        try { await i.channel.bulkDelete(amount, true); return i.reply({ content: `✅ Cleared **${amount}** messages.`, flags: MessageFlags.Ephemeral }); }
+        catch (e) { return i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
+      }
+
+      if (name === 'clearallproducts') {
+        if (!i.member.roles.cache.has(CLEAR_PRODUCTS_ROLE_ID)) return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await saveStoreData({ sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null, serviceChannels: {}, serviceMessages: {} });
+        await updateStorePanel();
+        return i.editReply({ content: '✅ All products, services, and sections cleared!' });
+      }
+
+      if (name === 'giveaway') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const winners = i.options.getInteger('winners');
+        const product = i.options.getString('product');
+        const duration = parseDuration(i.options.getString('time'));
+        if (!duration) return i.editReply({ content: '❌ Invalid time format. Use `10m`, `1h`, `1d`, etc.' });
+        const blacklistRoles = (i.options.getString('blacklist_roles') || '').split(/\s+/).map(r => r.replace(/[<@&>]/g, '')).filter(Boolean);
+        const ch = await client.channels.fetch(GIVEAWAY_CHANNEL_ID).catch(() => null);
+        if (!ch) return i.editReply({ content: '❌ Giveaway channel not found.' });
+        await runGiveaway(ch, winners, product, duration, blacklistRoles);
+        return i.editReply({ content: `✅ Giveaway started in <#${GIVEAWAY_CHANNEL_ID}>!` });
+      }
+
+      if (name === 'setupstore') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await setupStorePanel();
+        return i.editReply({ content: '✅ Store panel placed!' });
+      }
+
+      if (name === 'resetearned') {
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const oldEarnings = await getEarnings();
+        const fields = [{ name: 'Old Earnings', value:
+          `<@${EARNER_1_ID}>: €${(oldEarnings[EARNER_1_ID] || 0).toFixed(2)}\n<@${EARNER_2_ID}>: €${(oldEarnings[EARNER_2_ID] || 0).toFixed(2)}\n<@${EARNER_3_ID}>: €${(oldEarnings[EARNER_3_ID] || 0).toFixed(2)}\n<@${EARNER_4_ID}>: €${(oldEarnings[EARNER_4_ID] || 0).toFixed(2)}` }];
+        await saveEarnings({ [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 });
+        await updateEarningsPanel();
+        await sendLog('🔄 Earnings Reset', `All earnings reset to **€0.00** by <@${i.user.id}>.`, 0xffaa00, fields);
+        return i.editReply({ content: '✅ Earnings reset to 0 for all users.' });
+      }
+
+      if (name === 'ticketpanel') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await setupTicketPanel();
+        return i.editReply({ content: '✅ Ticket panel placed!' });
+      }
+
+      if (name === 'refreshverify') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        await setupVerify();
+        return i.editReply({ content: '✅ Verify message refreshed!' });
+      }
+
+      if (name === 'removekruis') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const amount = i.options.getInteger('amount');
+        try {
+          const votes = await getLegitVotes();
+          if (!votes.reject.length) return i.editReply({ content: '⚠️ No crosses to remove.' });
+          const toRemove = Math.min(amount, votes.reject.length);
+          votes.reject.splice(votes.reject.length - toRemove, toRemove);
+          await saveLegitVotes(votes);
+          await setupLegit();
+          return i.editReply({ content: `✅ Removed **${toRemove}** crosses.` });
+        } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
+      }
+
+      if (name === 'restock') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const product = i.options.getString('product');
+        const service = i.options.getString('service');
+        const extra = i.options.getString('extra');
+        if (!product && !service) return i.editReply({ content: '❌ Provide either a `product` or a `service`.' });
+        if (product && service) return i.editReply({ content: '❌ Provide only **one** of `product` or `service`, not both.' });
+        const ch = await client.channels.fetch(RESTOCK_CHANNEL_ID).catch(() => null);
+        if (!ch) return i.editReply({ content: '❌ Restock channel not found.' });
+        const embed = new EmbedBuilder().setTitle('📦 Restock Alert!').setColor(0x00ff88).setThumbnail(LOGO).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+        if (product) {
+          embed.setDescription(`A product has been restocked!\n\n**Product:** ${product}\n` + (extra ? `**Extra:** ${extra}\n\n` : '\n') + `Get it now before it's gone! 🛒`);
+        } else {
+          const store = await getStoreData();
+          const channelId = store.serviceChannels?.[service];
+          embed.setDescription(`A service has been restocked!\n\n**Service:** ${service}\n**Channel:** ${channelId ? `<#${channelId}>` : '*No channel linked*'}\n` + (extra ? `**Extra:** ${extra}\n\n` : '\n') + `Check it out now! 🛒`);
+        }
+        await ch.send({ content: `<@&${VERIFIED_ROLE_ID}>`, embeds: [embed] });
+        await sendLog('📦 Restock', `<@${i.user.id}> restocked ${product ? `**${product}**` : `service **${service}**`}.${extra ? ` Extra: ${extra}` : ''}`, 0x00ff88);
+        return i.editReply({ content: '✅ Restock notification sent!' });
+      }
+
+      const ticket = (await getTickets())[i.channelId];
+
+      if (name === 'payment') {
+        if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+        const method = ticket.payment || 'ideal';
+        const methodName = PAYMENT_METHODS[method] || 'Unknown';
+        const linkOrCrypto = i.options.getString('link_or_crypto');
+        const bankAccountNumber = i.options.getString('bank_account_number');
+        const accountName = i.options.getString('account_name');
+        const embed = new EmbedBuilder()
+          .setTitle('💳 Payment Information').setColor(0x2ecc71)
+          .setDescription(`Please complete your payment using the details below.\n\n**Method:** ${methodName}`)
+          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+        if (method === 'bank') {
+          if (!bankAccountNumber || !accountName) return i.reply({ content: '❌ For Bank Transfer provide both `bank_account_number` and `account_name`.', flags: MessageFlags.Ephemeral });
+          embed.addFields(
+            { name: 'Bank Account (IBAN)', value: `\`${bankAccountNumber}\``, inline: false },
+            { name: 'Account Name', value: `\`${accountName}\``, inline: false }
+          );
+        } else if (method === 'crypto') {
+          if (!linkOrCrypto) return i.reply({ content: '❌ For Crypto provide a `link_or_crypto` (crypto address).', flags: MessageFlags.Ephemeral });
+          embed.addFields({ name: 'Crypto Address (LTC)', value: `\`${linkOrCrypto}\``, inline: false });
+        } else {
+          if (!linkOrCrypto) return i.reply({ content: '❌ For this method provide a `link_or_crypto`.', flags: MessageFlags.Ephemeral });
+          embed.addFields({ name: 'Payment Link', value: linkOrCrypto, inline: false });
+        }
+        return i.reply({ embeds: [embed] });
+      }
+
+      if (name === 'giveproduct') {
+        if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+        const store = await getStoreData();
+        const prodData = store.products[ticket.product];
+        if (!prodData) return i.reply({ content: '❌ Product not found in store data.', flags: MessageFlags.Ephemeral });
+        if (prodData.amount) return i.reply({ content: '❌ This command only works for Single Price products.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const loginList = i.options.getString('logins').trim().split(/\s+/).map((l, idx) => `${idx + 1}. \`${l}\``).join('\n');
+        const dmEmbed = new EmbedBuilder()
+          .setTitle('✅ Your Product Delivery').setColor(0x00ff88)
+          .setDescription(`Thank you for your purchase at **Prestige Market**!\n\nYour account details for **${ticket.product}**:\n\n${loginList}`)
+          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+        const ticketEmbed = new EmbedBuilder()
+          .setTitle('📦 Product Delivered').setColor(0x00ff88)
+          .setDescription(`Product delivered to <@${ticket.userId}>.\n\n**Product:** ${ticket.product}\n**Logins:**\n${loginList}`)
+          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+        try {
+          const targetUser = await client.users.fetch(ticket.userId);
+          await targetUser.send({ embeds: [dmEmbed] }).catch(() => console.log('Could not DM user'));
+          await i.channel.send({ embeds: [ticketEmbed] });
+          await sendLog('📦 Product Given', `<@${i.user.id}> gave **${ticket.product}** to <@${ticket.userId}> in <#${i.channelId}>.`, 0x00ff88);
+          return i.editReply({ content: '✅ Product delivered to the customer!' });
+        } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
+      }
+
+      if (name === 'changepaymentmethod') {
+        if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+        const menu = new StringSelectMenuBuilder().setCustomId('change_payment_method').setPlaceholder('Select a new payment method')
+          .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key, emoji: PAYMENT_EMOJIS[key] })));
+        return i.reply({ content: 'Select the new payment method:', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+      }
+
+      if (name === 'delivered') {
+        if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        try {
+          const store = await getStoreData();
+          const prodData = store.products[ticket.product];
+          let profit = 0;
+          const totalPrice = parsePrice(ticket.total);
+          if (prodData) profit = calculateProfit(totalPrice, ticket.quantity, prodData);
+          if (profit !== 0 && PAYMENT_COMMAND_ALLOWED_IDS.includes(i.user.id)) {
+            const earnings = await getEarnings();
+            earnings[i.user.id] = (earnings[i.user.id] || 0) + profit;
+            await saveEarnings(earnings);
+            await updateEarningsPanel();
+          }
+          const spent = await getCustomerSpent();
+          spent[ticket.userId] = (spent[ticket.userId] || 0) + totalPrice;
+          await saveCustomerSpent(spent);
+          await updateCustomerOverview();
+          const customerTickets = await getCustomerTickets();
+          customerTickets[ticket.userId] = (customerTickets[ticket.userId] || 0) + 1;
+          await saveCustomerTickets(customerTickets);
+          const history = await getCustomerHistory();
+          if (!history[ticket.userId]) history[ticket.userId] = [];
+          const prodInfo = store.products[ticket.product] || {};
+          history[ticket.userId].push({
+            product: ticket.product,
+            quantity: ticket.quantity,
+            total: ticket.total,
+            unit: prodInfo.amount || null,
+            sellerId: i.user.id,
+            deliveredAt: Date.now()
+          });
+          await saveCustomerHistory(history);
+          const member = await i.guild.members.fetch(ticket.userId).catch(() => null);
+          if (member) {
+            if (!member.roles.cache.has(VOUCH_ROLE_ID)) await member.roles.add(VOUCH_ROLE_ID).catch(() => {});
+            const newTotal = spent[ticket.userId];
+            for (const role of SPENT_ROLES) if (newTotal >= role.amount && !member.roles.cache.has(role.roleId)) await member.roles.add(role.roleId).catch(() => {});
+          }
+          const recentChannel = await client.channels.fetch(RECENT_PAYMENTS_CHANNEL_ID).catch(() => null);
+          if (recentChannel) {
+            const paymentEmbed = new EmbedBuilder().setTitle('💸 Recent Payment').setColor(0x00ff88)
+              .setDescription(`**Delivered by:** <@${i.user.id}>\n**Customer:** <@${ticket.userId}>\n**Product:** ${ticket.product} (${ticket.quantity}x)\n**Total:** ${ticket.total}\n**Profit:** €${profit.toFixed(2)}`)
+              .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+            await recentChannel.send({ embeds: [paymentEmbed] });
+          }
+          await i.channel.setParent(ARCHIVE_CATEGORY_ID, { lockPermissions: false });
+          const t = await getTickets();
+          if (t[i.channelId]) { t[i.channelId].categorie = 'archived'; await saveTickets(t); }
+          const targetUser = await client.users.fetch(ticket.userId).catch(() => null);
+          if (targetUser) {
+            const dmEmbed = new EmbedBuilder().setTitle('Thank you for your purchase!').setColor(0x00ff88)
+              .setDescription(`Thank you for your purchase at **Prestige Market**!\n\nPlease consider leaving a vouch in <#${VOUCH_CHANNEL_ID}> to support us.`)
+              .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+            const vouchButton = new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setLabel('Leave a Vouch').setStyle(ButtonStyle.Link).setURL(`https://discord.com/channels/${GUILD_ID}/${VOUCH_CHANNEL_ID}`)
+            );
+            await targetUser.send({ embeds: [dmEmbed], components: [vouchButton] }).catch(() => console.log('Could not DM user'));
+          }
+          await i.channel.send({ content: `✅ Order delivered! Ticket moved to archive. Thank you for your purchase, <@${ticket.userId}>!` });
+          await sendLog('📦 Order Delivered', `Order for <@${ticket.userId}> in <#${i.channelId}> marked as delivered by <@${i.user.id}>.`, 0x00ff88);
+          return i.editReply({ content: '✅ Ticket archived and user notified.' });
+        } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
+      }
+
+      if (name === 'close') {
+        if (!isStaff(i.member) && (!ticket || ticket.userId !== i.user.id)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+        await i.reply({ content: '🔒 Closing ticket...' });
+        return await closeTicket(i.channel, i.user.id);
+      }
+
+      if (name === 'add' || name === 'remove') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const targetUser = i.options.getUser('user');
+        try {
+          if (name === 'add') {
+            await i.channel.permissionOverwrites.edit(targetUser.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true, AttachFiles: true });
+            await i.channel.send({ content: `➕ <@${targetUser.id}> has been added by <@${i.user.id}>.` });
+          } else {
+            await i.channel.permissionOverwrites.delete(targetUser.id);
+            await i.channel.send({ content: `➖ <@${targetUser.id}> has been removed by <@${i.user.id}>.` });
+          }
+          await i.editReply({ content: '✅ Success.' });
+        } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+        return;
+      }
+
+      if (name === 'rename') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const newName = i.options.getString('name').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+        try { await i.channel.setName(newName); await i.editReply({ content: `✅ Renamed to ${newName}.` }); }
+        catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+        return;
+      }
+
+      if (name === 'move') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        if (!ticket) return i.reply({ content: '❌ This is not an active ticket.', flags: MessageFlags.Ephemeral });
+        const menu = new StringSelectMenuBuilder().setCustomId('move_ticket_select').setPlaceholder('Choose a category...')
+          .addOptions(Object.entries(ALLOWED_MOVE_CATEGORIES).map(([id, name]) => ({ label: name, value: id })));
+        return i.reply({ content: 'Choose the category to move this ticket to:', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+      }
+    }
+
+    if (i.isModalSubmit()) {
+      const cid = i.customId;
+
+      if (cid === 'modal_add_section') {
+        const name = i.fields.getTextInputValue('section_name');
+        const store = await getStoreData();
+        if (!store.sections[name]) store.sections[name] = [];
+        store.lastSection = name;
+        await saveStoreData(store);
+        await updateStorePanel();
+        return i.reply({ content: `✅ Section **${name}** added.`, flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid.startsWith('modal_add_service_')) {
+        const section = cid.replace('modal_add_service_', '');
+        const name = i.fields.getTextInputValue('service_name');
+        const store = await getStoreData();
+        if (!store.sections[section]) return i.reply({ content: '❌ Section not found.', flags: MessageFlags.Ephemeral });
+        if (!store.sections[section].includes(name)) store.sections[section].push(name);
+        if (!store.services[name]) store.services[name] = [];
+        store.lastService = name;
+        await saveStoreData(store);
+        await updateStorePanel();
+        return i.reply({
+          content: `✅ Service **${name}** added to **${section}**.\n\nClick the button below to link a text channel to this service shop (you can type \`#channel\`).`,
+          components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`link_channel_btn_${name}`).setLabel('Link Channel').setEmoji('🔗').setStyle(ButtonStyle.Primary)
+          )],
+          flags: MessageFlags.Ephemeral
+        });
+      }
+
+      if (cid.startsWith('link_channel_modal_')) {
+        const serviceName = cid.replace('link_channel_modal_', '');
+        const raw = i.fields.getTextInputValue('channel_input').trim();
+        const clean = raw.replace(/[<#>]/g, '');
+        let targetChannel = i.guild.channels.cache.get(clean)
+          || i.guild.channels.cache.find(c => c.name.toLowerCase() === clean.toLowerCase());
+        if (!targetChannel) return i.reply({ content: `❌ Channel \`${raw}\` not found. Use \`#channel-name\` or the channel ID.`, flags: MessageFlags.Ephemeral });
+        if (targetChannel.type !== ChannelType.GuildText) return i.reply({ content: `❌ <#${targetChannel.id}> is not a text channel.`, flags: MessageFlags.Ephemeral });
+        const store = await getStoreData();
+        if (!store.serviceChannels) store.serviceChannels = {};
+        store.serviceChannels[serviceName] = targetChannel.id;
+        await saveStoreData(store);
+        await updateServiceShop(serviceName);
+        return i.reply({ content: `✅ Service **${serviceName}** linked to <#${targetChannel.id}> and shop embed placed!`, flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid.startsWith('modal_add_product_')) {
+        const service = cid.replace('modal_add_product_', '');
+        const name = i.fields.getTextInputValue('product_name');
+        const store = await getStoreData();
+        if (!store.services[service]) return i.reply({ content: '❌ Service not found.', flags: MessageFlags.Ephemeral });
+        if (!store.services[service].includes(name)) store.services[service].push(name);
+        if (!store.products[name]) store.products[name] = {};
+        store.lastProduct = name;
+        await saveStoreData(store);
+        await updateStorePanel();
+        if (store.serviceChannels?.[service]) await updateServiceShop(service);
+        return i.reply({ content: `✅ Product **${name}** added to **${service}**.`, flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid.startsWith('modal_add_price_single_')) {
+        const product = cid.replace('modal_add_price_single_', '');
+        const price = i.fields.getTextInputValue('product_price');
+        const buyCost = i.fields.getTextInputValue('product_buy_cost');
+        const store = await getStoreData();
+        if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
+        store.products[product].price = price;
+        store.products[product].amount = '';
+        if (buyCost) store.products[product].buyCost = buyCost;
+        await saveStoreData(store);
+        await updateStorePanel();
+        return i.reply({ content: `✅ Single price for **${product}** set to **${formatPrice(price)}**. Buy cost: €${buyCost || 0}.`, flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid.startsWith('modal_add_price_amount_')) {
+        const product = cid.replace('modal_add_price_amount_', '');
+        const price = i.fields.getTextInputValue('product_price');
+        const amount = i.fields.getTextInputValue('product_amount');
+        const buyCost = i.fields.getTextInputValue('product_buy_cost');
+        const store = await getStoreData();
+        if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
+        store.products[product].price = price;
+        store.products[product].amount = amount;
+        if (buyCost) store.products[product].buyCost = buyCost;
+        await saveStoreData(store);
+        await updateStorePanel();
+        return i.reply({ content: `✅ Price for **${product}** set to **${formatPrice(price)}** per **${amount}**. Buy cost: €${buyCost || 0}.`, flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid.startsWith('modal_purchase_amount_')) {
+        const product = cid.replace('modal_purchase_amount_', '');
+        const quantity = parseInt(i.fields.getTextInputValue('quantity'));
+        if (isNaN(quantity) || quantity <= 0) return i.reply({ content: '❌ Invalid quantity. Enter a number.', flags: MessageFlags.Ephemeral });
+        const store = await getStoreData();
+        const prodData = store.products[product];
+        if (!prodData || !prodData.price || prodData.price === 'N/A') return i.reply({ content: '❌ Price not set for this product.', flags: MessageFlags.Ephemeral });
+        const pricePer = parseFloat(prodData.price.toString().replace('€', '').replace(',', '.').trim());
+        const amountPer = prodData.amount ? parseInt(prodData.amount) : 1;
+        const total = ((pricePer / amountPer) * quantity).toFixed(2).replace('.', ',');
+        const formattedTotal = `€${total}`;
+        const data = pendingPurchases.get(i.user.id);
+        if (!data) return i.reply({ content: '❌ Session expired.', flags: MessageFlags.Ephemeral });
+        data.product = product; data.quantity = quantity; data.total = formattedTotal;
+        const menu = new StringSelectMenuBuilder().setCustomId('purchase_payment').setPlaceholder('Select payment method')
+          .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key, emoji: PAYMENT_EMOJIS[key] })));
+        return i.update({ content: `You want **${quantity}** of **${product}**. Total: **${formattedTotal}**.\n\nSelect your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
+      }
+
+      if (cid.startsWith('modal_create_ticket_')) {
+        const category = cid.replace('modal_create_ticket_', '');
+        const cat = TICKET_CATEGORIES[category];
+        if (!cat) return i.reply({ content: '❌ Unknown category.', flags: MessageFlags.Ephemeral });
+        const questionAnswer = i.fields.getTextInputValue('question_answer');
+        const questionAnswer2 = category === 'partner' ? i.fields.getTextInputValue('question_answer_2') : null;
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        try {
+          const guild = i.guild;
+          const tickets = await getTickets();
+          if (Object.values(tickets).find(t => t.userId === i.user.id)) return i.editReply({ content: '❌ You already have an open ticket.' });
+          const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
+          const overwrites = [
+            { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+            { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+            { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
+          ];
+          const ticketChannel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}` });
+          await addTicket(ticketChannel.id, i.user.id, category);
+          const customerTickets = await getCustomerTickets();
+          customerTickets[i.user.id] = (customerTickets[i.user.id] || 0) + 1;
+          await saveCustomerTickets(customerTickets);
+          const stats = await getTicketStats();
+          stats.total += 1;
+          await saveTicketStats(stats);
+          await updateTicketStats();
+          const embed = new EmbedBuilder().setTitle(cat.name).setColor(cat.color)
+            .setDescription(`<@${i.user.id}> — Thank you for opening a ticket. Please wait for a staff member to assist you.`)
+            .addFields({ name: 'Your Answer', value: questionAnswer }).setTimestamp();
+          if (questionAnswer2) embed.addFields({ name: 'Second Answer', value: questionAnswer2 });
+          const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+          await ticketChannel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
+          await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
+        } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+        return;
+      }
+
+      if (cid.startsWith('edit_service_modal_')) {
+        const oldName = cid.replace('edit_service_modal_', '');
+        const newName = i.fields.getTextInputValue('new_name');
+        const store = await getStoreData();
+        if (!store.services[oldName]) return i.reply({ content: '❌ Service not found.', flags: MessageFlags.Ephemeral });
+        for (const list of Object.values(store.sections)) {
+          const idx = list.indexOf(oldName);
+          if (idx !== -1) list[idx] = newName;
+        }
+        store.services[newName] = store.services[oldName];
+        delete store.services[oldName];
+        if (store.serviceChannels?.[oldName]) { store.serviceChannels[newName] = store.serviceChannels[oldName]; delete store.serviceChannels[oldName]; }
+        if (store.serviceMessages?.[oldName]) { store.serviceMessages[newName] = store.serviceMessages[oldName]; delete store.serviceMessages[oldName]; }
+        await saveStoreData(store);
+        await updateStorePanel();
+        if (store.serviceChannels?.[newName]) await updateServiceShop(newName);
+        return i.reply({ content: `✅ Service **${oldName}** renamed to **${newName}**.`, flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid.startsWith('edit_price_modal_')) {
+        const product = cid.replace('edit_price_modal_', '');
+        const price = i.fields.getTextInputValue('product_price');
+        const amount = i.fields.getTextInputValue('product_amount');
+        const buyCost = i.fields.getTextInputValue('product_buy_cost');
+        const store = await getStoreData();
+        if (!store.products[product]) return i.reply({ content: '❌ Product not found.', flags: MessageFlags.Ephemeral });
+        store.products[product].price = price;
+        store.products[product].amount = amount;
+        if (buyCost) store.products[product].buyCost = buyCost;
+        await saveStoreData(store);
+        await updateStorePanel();
+        return i.reply({ content: `✅ Price for **${product}** updated.`, flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid.startsWith('giveaway_reroll_modal_')) {
+        const messageId = cid.replace('giveaway_reroll_modal_', '');
+        const amount = parseInt(i.fields.getTextInputValue('reroll_amount'));
+        if (isNaN(amount) || amount <= 0) return i.reply({ content: '❌ Invalid amount.', flags: MessageFlags.Ephemeral });
+        const giveaways = await getGiveaways();
+        const giveaway = giveaways[messageId];
+        if (!giveaway) return i.reply({ content: '❌ Giveaway not found.', flags: MessageFlags.Ephemeral });
+        const filtered = (giveaway.participants || []).filter(id => !giveaway.winnersList.includes(id));
+        if (!filtered.length) return i.reply({ content: '❌ No new participants to reroll from.', flags: MessageFlags.Ephemeral });
+        const newWinners = filtered.sort(() => Math.random() - 0.5).slice(0, amount);
+        giveaway.winnersList = newWinners;
+        await saveGiveaways(giveaways);
+        const winnerMentions = newWinners.map(id => `<@${id}>`).join(', ');
+        const resultEmbed = new EmbedBuilder().setTitle('🔄 Giveaway Rerolled 🔄').setColor(0xffaa00)
+          .setDescription(`**Prize:** ${giveaway.product}\n**New Winners:** ${winnerMentions}\n\nCongratulations!`)
+          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+        await i.channel.send({ content: `🔄 Rerolled! Congratulations ${winnerMentions}!`, embeds: [resultEmbed] });
+        return i.reply({ content: '✅ Winners rerolled!', flags: MessageFlags.Ephemeral });
+      }
+    }
+
+    if (i.isStringSelectMenu()) {
+      const userId = i.user.id;
+      const cid = i.customId;
+
+      if (cid === 'ticket_category_select') {
+        const choice = i.values[0];
+        const cat = TICKET_CATEGORIES[choice];
+        if (!cat) return i.reply({ content: '❌ Unknown category.', flags: MessageFlags.Ephemeral });
+
+        if (choice === 'purchase') {
+          await i.deferReply({ flags: MessageFlags.Ephemeral });
+          const store = await getStoreData();
+          const sections = Object.keys(store.sections);
+          if (!sections.length) return i.editReply({ content: '❌ No store sections configured yet. Please contact staff.' });
+          pendingPurchases.set(userId, { section: null, service: null, product: null, quantity: null, total: null, payment: null });
+          const menu = new StringSelectMenuBuilder().setCustomId('purchase_section').setPlaceholder('Select a section')
+            .addOptions(sections.map(s => ({ label: s, value: s })));
+          return i.editReply({ content: 'Which section do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
+        }
+
+        if (choice === 'support' || choice === 'bug') {
+          const modal = new ModalBuilder().setCustomId(`modal_create_ticket_${choice}`).setTitle(`${cat.name} Ticket`);
+          const input = new TextInputBuilder().setCustomId('question_answer').setLabel('Describe your issue / question').setStyle(TextInputStyle.Paragraph).setRequired(true);
+          modal.addComponents(new ActionRowBuilder().addComponents(input));
+          return i.showModal(modal);
+        }
+
+        if (choice === 'partner') {
+          const modal = new ModalBuilder().setCustomId(`modal_create_ticket_${choice}`).setTitle(`${cat.name} Ticket`);
+          const input1 = new TextInputBuilder().setCustomId('question_answer').setLabel('Why do you want to become a partner?').setStyle(TextInputStyle.Paragraph).setRequired(true);
+          const input2 = new TextInputBuilder().setCustomId('question_answer_2').setLabel('What benefits do we have being partners?').setStyle(TextInputStyle.Paragraph).setRequired(true);
+          modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
+          return i.showModal(modal);
+        }
+
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        try {
+          const guild = i.guild;
+          const tickets = await getTickets();
+          if (Object.values(tickets).find(t => t.userId === userId)) return i.editReply({ content: '❌ You already have an open ticket.' });
+          const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
+          const overwrites = [
+            { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+            { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+            { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
+          ];
+          const ticketChannel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}` });
+          await addTicket(ticketChannel.id, userId, choice);
+          const customerTickets = await getCustomerTickets();
+          customerTickets[userId] = (customerTickets[userId] || 0) + 1;
+          await saveCustomerTickets(customerTickets);
+          const stats = await getTicketStats();
+          stats.total += 1;
+          await saveTicketStats(stats);
+          await updateTicketStats();
+          const embed = new EmbedBuilder().setTitle(cat.name).setColor(cat.color).setDescription(`<@${userId}> — Please describe your question below.`).setTimestamp();
+          const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+          await ticketChannel.send({ content: `<@${userId}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
+          await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
+        } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+        return;
+      }
+
+      if (cid === 'change_payment_method') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        const newMethod = i.values[0];
+        const tickets = await getTickets();
+        if (!tickets[i.channelId]) return i.update({ content: '❌ Ticket not found.', components: [] });
+        tickets[i.channelId].payment = newMethod;
+        await saveTickets(tickets);
+        return i.update({ content: `✅ Payment method changed to **${PAYMENT_METHODS[newMethod]}**.`, components: [] });
+      }
+
+      if (cid.startsWith('select_price_type_')) {
+        const product = cid.replace('select_price_type_', '');
+        const choice = i.values[0];
+        if (choice === 'single') {
+          const modal = new ModalBuilder().setCustomId(`modal_add_price_single_${product}`).setTitle('Add Single Price');
+          const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setRequired(true);
+          const input2 = new TextInputBuilder().setCustomId('product_buy_cost').setLabel('Buy Cost (e.g. 2 or 0,50)').setStyle(TextInputStyle.Short).setRequired(false);
+          modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
+          return i.showModal(modal);
+        }
+        const modal = new ModalBuilder().setCustomId(`modal_add_price_amount_${product}`).setTitle('Add Price Per Amount');
+        const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setRequired(true);
+        const input2 = new TextInputBuilder().setCustomId('product_amount').setLabel('Amount (e.g. 1000)').setStyle(TextInputStyle.Short).setRequired(true);
+        const input3 = new TextInputBuilder().setCustomId('product_buy_cost').setLabel('Buy Cost (e.g. 2 or 0,50)').setStyle(TextInputStyle.Short).setRequired(false);
+        modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2), new ActionRowBuilder().addComponents(input3));
+        return i.showModal(modal);
+      }
+
+      if (cid === 'store_remove_type') {
+        const type = i.values[0];
+        const store = await getStoreData();
+        if (type === 'section') {
+          const sections = Object.keys(store.sections);
+          if (!sections.length) return i.update({ content: '❌ No sections to remove.', components: [] });
+          const menu = new StringSelectMenuBuilder().setCustomId('store_remove_section').setPlaceholder('Select a section to remove').addOptions(sections.map(s => ({ label: s, value: s })));
+          return i.update({ content: '🗑️ Which **section** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
+        }
+        if (type === 'service') {
+          const services = Object.keys(store.services);
+          if (!services.length) return i.update({ content: '❌ No services to remove.', components: [] });
+          const menu = new StringSelectMenuBuilder().setCustomId('store_remove_service').setPlaceholder('Select a service to remove').addOptions(services.map(s => ({ label: s, value: s })));
+          return i.update({ content: '🗑️ Which **service** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
+        }
+        if (type === 'product') {
+          const products = Object.keys(store.products);
+          if (!products.length) return i.update({ content: '❌ No products to remove.', components: [] });
+          const menu = new StringSelectMenuBuilder().setCustomId('store_remove_product').setPlaceholder('Select a product to remove').addOptions(products.map(p => ({ label: p, value: p })));
+          return i.update({ content: '🗑️ Which **product** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
+        }
+        if (type === 'price') {
+          const products = Object.entries(store.products).filter(([_, p]) => p.price || p.amount);
+          if (!products.length) return i.update({ content: '❌ No prices to remove.', components: [] });
+          const menu = new StringSelectMenuBuilder().setCustomId('store_remove_price').setPlaceholder('Select a product price to remove')
+            .addOptions(products.map(([name, p]) => ({ label: `${name} (${formatPrice(p.price)})`, value: name })));
+          return i.update({ content: '🗑️ Which **price** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
+        }
+        return;
+      }
+
+      if (cid === 'store_remove_section') {
+        const section = i.values[0];
+        const store = await getStoreData();
+        for (const service of store.sections[section] || []) {
+          const stillUsed = Object.entries(store.sections).some(([s, list]) => s !== section && list.includes(service));
+          if (!stillUsed) {
+            for (const prod of store.services[service] || []) {
+              if (!Object.values(store.services).some(list => list.includes(prod))) delete store.products[prod];
+            }
+            delete store.services[service];
+          }
+        }
+        delete store.sections[section];
+        await saveStoreData(store);
+        await updateStorePanel();
+        return i.update({ content: `✅ Section **${section}** removed.`, components: [] });
+      }
+
+      if (cid === 'store_remove_service') {
+        const service = i.values[0];
+        const store = await getStoreData();
+        for (const list of Object.values(store.sections)) {
+          const idx = list.indexOf(service);
+          if (idx !== -1) list.splice(idx, 1);
+        }
+        for (const prod of store.services[service] || []) {
+          if (!Object.values(store.services).some(list => list.includes(prod))) delete store.products[prod];
+        }
+        delete store.services[service];
+        await saveStoreData(store);
+        await updateStorePanel();
+        return i.update({ content: `✅ Service **${service}** removed.`, components: [] });
+      }
+
+      if (cid === 'store_remove_product') {
+        const product = i.values[0];
+        const store = await getStoreData();
+        for (const list of Object.values(store.services)) {
+          const idx = list.indexOf(product);
+          if (idx !== -1) list.splice(idx, 1);
+        }
+        delete store.products[product];
+        await saveStoreData(store);
+        await updateStorePanel();
+        return i.update({ content: `✅ Product **${product}** removed.`, components: [] });
+      }
+
+      if (cid === 'store_remove_price') {
+        const product = i.values[0];
+        const store = await getStoreData();
+        if (!store.products[product]) return i.update({ content: '❌ Product not found.', components: [] });
+        store.products[product].price = 'N/A';
+        store.products[product].amount = '';
+        delete store.products[product].buyCost;
+        await saveStoreData(store);
+        await updateStorePanel();
+        return i.update({ content: `✅ Price for **${product}** removed.`, components: [] });
+      }
+
+      if (cid === 'select_section_for_service') {
+        const section = i.values[0];
+        const modal = new ModalBuilder().setCustomId(`modal_add_service_${section}`).setTitle('Add Service');
+        const input = new TextInputBuilder().setCustomId('service_name').setLabel('Service Name').setStyle(TextInputStyle.Short).setRequired(true);
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         return i.showModal(modal);
       }
 
-      if (choice === 'partner') {
-        const modal = new ModalBuilder().setCustomId(`modal_create_ticket_${choice}`).setTitle(`${cat.name} Ticket`);
-        const input1 = new TextInputBuilder().setCustomId('question_answer').setLabel('Why do you want to become a partner?').setStyle(TextInputStyle.Paragraph).setRequired(true);
-        const input2 = new TextInputBuilder().setCustomId('question_answer_2').setLabel('What benefits do we have being partners?').setStyle(TextInputStyle.Paragraph).setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
+      if (cid === 'select_service_for_product') {
+        const service = i.values[0];
+        const modal = new ModalBuilder().setCustomId(`modal_add_product_${service}`).setTitle('Add Product');
+        const input = new TextInputBuilder().setCustomId('product_name').setLabel('Product Name').setStyle(TextInputStyle.Short).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
         return i.showModal(modal);
       }
 
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      try {
-        const guild = i.guild;
-        const tickets = await getTickets();
-        if (Object.values(tickets).find(t => t.userId === userId)) return i.editReply({ content: '❌ You already have an open ticket.' });
-        const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
-        const overwrites = [
-          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
-          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
-          { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
-        ];
-        const ticketChannel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}` });
-        await addTicket(ticketChannel.id, userId, choice);
-        const customerTickets = await getCustomerTickets();
-        customerTickets[userId] = (customerTickets[userId] || 0) + 1;
-        await saveCustomerTickets(customerTickets);
-        const stats = await getTicketStats();
-        stats.total += 1;
-        await saveTicketStats(stats);
-        await updateTicketStats();
-        const embed = new EmbedBuilder().setTitle(cat.name).setColor(cat.color).setDescription(`<@${userId}> — Please describe your question below.`).setTimestamp();
-        const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-        await ticketChannel.send({ content: `<@${userId}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
-        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
-      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
-      return;
-    }
+      if (cid === 'select_product_for_price') {
+        const product = i.values[0];
+        const menu = new StringSelectMenuBuilder().setCustomId(`select_price_type_${product}`).setPlaceholder('Is this a single price?')
+          .addOptions([
+            { label: 'Yes — single price', value: 'single', emoji: '✅' },
+            { label: 'No — price per amount', value: 'per_amount', emoji: '➗' },
+          ]);
+        return i.update({ content: `💰 Is **${product}** a single price or a price per amount?`, components: [new ActionRowBuilder().addComponents(menu)] });
+      }
 
-    if (cid === 'change_payment_method') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const newMethod = i.values[0];
-      const tickets = await getTickets();
-      if (!tickets[i.channelId]) return i.update({ content: '❌ Ticket not found.', components: [] });
-      tickets[i.channelId].payment = newMethod;
-      await saveTickets(tickets);
-      return i.update({ content: `✅ Payment method changed to **${PAYMENT_METHODS[newMethod]}**.`, components: [] });
-    }
+      if (cid === 'purchase_section') {
+        const data = pendingPurchases.get(userId);
+        if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
+        data.section = i.values[0];
+        const store = await getStoreData();
+        const services = store.sections[data.section] || [];
+        if (!services.length) return i.update({ content: '❌ No services found for this section.', components: [] });
+        const menu = new StringSelectMenuBuilder().setCustomId('purchase_service').setPlaceholder('What service do you want to buy?').addOptions(services.map(s => ({ label: s, value: s })));
+        return i.update({ content: 'What service do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
 
-    if (cid.startsWith('select_price_type_')) {
-      const product = cid.replace('select_price_type_', '');
-      const choice = i.values[0];
-      if (choice === 'single') {
-        const modal = new ModalBuilder().setCustomId(`modal_add_price_single_${product}`).setTitle('Add Single Price');
-        const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setRequired(true);
-        const input2 = new TextInputBuilder().setCustomId('product_buy_cost').setLabel('Buy Cost (e.g. 2 or 0,50)').setStyle(TextInputStyle.Short).setRequired(false);
-        modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2));
+      if (cid === 'purchase_service') {
+        const data = pendingPurchases.get(userId);
+        if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
+        data.service = i.values[0];
+        const store = await getStoreData();
+        const products = store.services[data.service] || [];
+        if (!products.length) return i.update({ content: '❌ No products found for this service.', components: [] });
+        const menu = new StringSelectMenuBuilder().setCustomId('purchase_product').setPlaceholder('Which product do you want to buy?')
+          .addOptions(products.map(p => {
+            const pd = store.products[p];
+            const priceLabel = pd?.amount ? `${formatPrice(pd.price)} per ${pd.amount}` : formatPrice(pd?.price);
+            return { label: `${p} (${priceLabel})`, value: p };
+          }));
+        return i.update({ content: 'Which product do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
+      }
+
+      if (cid === 'purchase_product') {
+        const data = pendingPurchases.get(userId);
+        if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
+        data.product = i.values[0];
+        const store = await getStoreData();
+        const prod = store.products[data.product];
+        if (!prod || !prod.price || prod.price === 'N/A') return i.update({ content: '❌ Price not set for this product.', components: [] });
+        const amountLabel = prod.amount ? ` per ${prod.amount}` : '';
+        const modal = new ModalBuilder().setCustomId(`modal_purchase_amount_${data.product}`).setTitle('Enter Quantity');
+        const input = new TextInputBuilder().setCustomId('quantity').setLabel(`How many? (Price: ${formatPrice(prod.price)}${amountLabel})`).setStyle(TextInputStyle.Short).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
         return i.showModal(modal);
       }
-      const modal = new ModalBuilder().setCustomId(`modal_add_price_amount_${product}`).setTitle('Add Price Per Amount');
-      const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setRequired(true);
-      const input2 = new TextInputBuilder().setCustomId('product_amount').setLabel('Amount (e.g. 1000)').setStyle(TextInputStyle.Short).setRequired(true);
-      const input3 = new TextInputBuilder().setCustomId('product_buy_cost').setLabel('Buy Cost (e.g. 2 or 0,50)').setStyle(TextInputStyle.Short).setRequired(false);
-      modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2), new ActionRowBuilder().addComponents(input3));
-      return i.showModal(modal);
-    }
 
-    if (cid === 'store_remove_type') {
-      const type = i.values[0];
-      const store = await getStoreData();
-      if (type === 'section') {
-        const sections = Object.keys(store.sections);
-        if (!sections.length) return i.update({ content: '❌ No sections to remove.', components: [] });
-        const menu = new StringSelectMenuBuilder().setCustomId('store_remove_section').setPlaceholder('Select a section to remove').addOptions(sections.map(s => ({ label: s, value: s })));
-        return i.update({ content: '🗑️ Which **section** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
-      }
-      if (type === 'service') {
-        const services = Object.keys(store.services);
-        if (!services.length) return i.update({ content: '❌ No services to remove.', components: [] });
-        const menu = new StringSelectMenuBuilder().setCustomId('store_remove_service').setPlaceholder('Select a service to remove').addOptions(services.map(s => ({ label: s, value: s })));
-        return i.update({ content: '🗑️ Which **service** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
-      }
-      if (type === 'product') {
-        const products = Object.keys(store.products);
-        if (!products.length) return i.update({ content: '❌ No products to remove.', components: [] });
-        const menu = new StringSelectMenuBuilder().setCustomId('store_remove_product').setPlaceholder('Select a product to remove').addOptions(products.map(p => ({ label: p, value: p })));
-        return i.update({ content: '🗑️ Which **product** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
-      }
-      if (type === 'price') {
-        const products = Object.entries(store.products).filter(([_, p]) => p.price || p.amount);
-        if (!products.length) return i.update({ content: '❌ No prices to remove.', components: [] });
-        const menu = new StringSelectMenuBuilder().setCustomId('store_remove_price').setPlaceholder('Select a product price to remove')
-          .addOptions(products.map(([name, p]) => ({ label: `${name} (${formatPrice(p.price)})`, value: name })));
-        return i.update({ content: '🗑️ Which **price** do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)] });
-      }
-      return;
-    }
-
-    if (cid === 'store_remove_section') {
-      const section = i.values[0];
-      const store = await getStoreData();
-      for (const service of store.sections[section] || []) {
-        const stillUsed = Object.entries(store.sections).some(([s, list]) => s !== section && list.includes(service));
-        if (!stillUsed) {
-          for (const prod of store.services[service] || []) {
-            if (!Object.values(store.services).some(list => list.includes(prod))) delete store.products[prod];
-          }
-          delete store.services[service];
-        }
-      }
-      delete store.sections[section];
-      await saveStoreData(store);
-      await updateStorePanel();
-      return i.update({ content: `✅ Section **${section}** removed.`, components: [] });
-    }
-
-    if (cid === 'store_remove_service') {
-      const service = i.values[0];
-      const store = await getStoreData();
-      for (const list of Object.values(store.sections)) {
-        const idx = list.indexOf(service);
-        if (idx !== -1) list.splice(idx, 1);
-      }
-      for (const prod of store.services[service] || []) {
-        if (!Object.values(store.services).some(list => list.includes(prod))) delete store.products[prod];
-      }
-      delete store.services[service];
-      await saveStoreData(store);
-      await updateStorePanel();
-      return i.update({ content: `✅ Service **${service}** removed.`, components: [] });
-    }
-
-    if (cid === 'store_remove_product') {
-      const product = i.values[0];
-      const store = await getStoreData();
-      for (const list of Object.values(store.services)) {
-        const idx = list.indexOf(product);
-        if (idx !== -1) list.splice(idx, 1);
-      }
-      delete store.products[product];
-      await saveStoreData(store);
-      await updateStorePanel();
-      return i.update({ content: `✅ Product **${product}** removed.`, components: [] });
-    }
-
-    if (cid === 'store_remove_price') {
-      const product = i.values[0];
-      const store = await getStoreData();
-      if (!store.products[product]) return i.update({ content: '❌ Product not found.', components: [] });
-      store.products[product].price = 'N/A';
-      store.products[product].amount = '';
-      delete store.products[product].buyCost;
-      await saveStoreData(store);
-      await updateStorePanel();
-      return i.update({ content: `✅ Price for **${product}** removed.`, components: [] });
-    }
-
-    if (cid === 'select_section_for_service') {
-      const section = i.values[0];
-      const modal = new ModalBuilder().setCustomId(`modal_add_service_${section}`).setTitle('Add Service');
-      const input = new TextInputBuilder().setCustomId('service_name').setLabel('Service Name').setStyle(TextInputStyle.Short).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return i.showModal(modal);
-    }
-
-    if (cid === 'select_service_for_product') {
-      const service = i.values[0];
-      const modal = new ModalBuilder().setCustomId(`modal_add_product_${service}`).setTitle('Add Product');
-      const input = new TextInputBuilder().setCustomId('product_name').setLabel('Product Name').setStyle(TextInputStyle.Short).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return i.showModal(modal);
-    }
-
-    if (cid === 'select_product_for_price') {
-      const product = i.values[0];
-      const menu = new StringSelectMenuBuilder().setCustomId(`select_price_type_${product}`).setPlaceholder('Is this a single price?')
-        .addOptions([
-          { label: 'Yes — single price', value: 'single', emoji: '✅' },
-          { label: 'No — price per amount', value: 'per_amount', emoji: '➗' },
-        ]);
-      return i.update({ content: `💰 Is **${product}** a single price or a price per amount?`, components: [new ActionRowBuilder().addComponents(menu)] });
-    }
-
-    if (cid === 'purchase_section') {
-      const data = pendingPurchases.get(userId);
-      if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
-      data.section = i.values[0];
-      const store = await getStoreData();
-      const services = store.sections[data.section] || [];
-      if (!services.length) return i.update({ content: '❌ No services found for this section.', components: [] });
-      const menu = new StringSelectMenuBuilder().setCustomId('purchase_service').setPlaceholder('What service do you want to buy?').addOptions(services.map(s => ({ label: s, value: s })));
-      return i.update({ content: 'What service do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
-    }
-
-    if (cid === 'purchase_service') {
-      const data = pendingPurchases.get(userId);
-      if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
-      data.service = i.values[0];
-      const store = await getStoreData();
-      const products = store.services[data.service] || [];
-      if (!products.length) return i.update({ content: '❌ No products found for this service.', components: [] });
-      const menu = new StringSelectMenuBuilder().setCustomId('purchase_product').setPlaceholder('Which product do you want to buy?')
-        .addOptions(products.map(p => {
-          const pd = store.products[p];
-          const priceLabel = pd?.amount ? `${formatPrice(pd.price)} per ${pd.amount}` : formatPrice(pd?.price);
-          return { label: `${p} (${priceLabel})`, value: p };
-        }));
-      return i.update({ content: 'Which product do you want to buy?', components: [new ActionRowBuilder().addComponents(menu)] });
-    }
-
-    if (cid === 'purchase_product') {
-      const data = pendingPurchases.get(userId);
-      if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
-      data.product = i.values[0];
-      const store = await getStoreData();
-      const prod = store.products[data.product];
-      if (!prod || !prod.price || prod.price === 'N/A') return i.update({ content: '❌ Price not set for this product.', components: [] });
-      const amountLabel = prod.amount ? ` per ${prod.amount}` : '';
-      const modal = new ModalBuilder().setCustomId(`modal_purchase_amount_${data.product}`).setTitle('Enter Quantity');
-      const input = new TextInputBuilder().setCustomId('quantity').setLabel(`How many? (Price: ${formatPrice(prod.price)}${amountLabel})`).setStyle(TextInputStyle.Short).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return i.showModal(modal);
-    }
-
-    if (cid === 'purchase_payment') {
-      const data = pendingPurchases.get(userId);
-      if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
-      data.payment = i.values[0];
-      const paymentName = PAYMENT_METHODS[data.payment];
-      await i.update({ content: '✅ Creating your ticket...', components: [] });
-      try {
-        const guild = i.guild;
-        const tickets = await getTickets();
-        if (Object.values(tickets).find(t => t.userId === userId)) { pendingPurchases.delete(userId); return i.editReply({ content: '❌ You already have an open ticket.' }); }
-        const cat = TICKET_CATEGORIES.purchase;
-        const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
-        const overwrites = [
-          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
-          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
-          { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
-        ];
-        const ticketChannel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}` });
-        await addTicket(ticketChannel.id, userId, 'purchase', { section: data.section, service: data.service, product: data.product, quantity: data.quantity, total: data.total, payment: data.payment });
-        const customerTickets = await getCustomerTickets();
-        customerTickets[userId] = (customerTickets[userId] || 0) + 1;
-        await saveCustomerTickets(customerTickets);
-        const stats = await getTicketStats();
-        stats.total += 1;
-        await saveTicketStats(stats);
-        await updateTicketStats();
-        const embed = new EmbedBuilder().setTitle('🛒 Purchase Details').setColor(0x00ff88).setThumbnail(LOGO)
-          .setDescription(`Thank you for your order, <@${userId}>! Please wait for a staff member to assist you.`)
-          .addFields(
-            { name: 'Section', value: data.section, inline: true },
-            { name: 'Service', value: data.service, inline: true },
-            { name: 'Product', value: data.product, inline: true },
-            { name: 'Quantity', value: `${data.quantity}`, inline: true },
-            { name: 'Total Price', value: data.total, inline: true },
-            { name: 'Payment Method', value: paymentName, inline: true }
-          ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-        const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-        await ticketChannel.send({ content: `<@${userId}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
-        await sendLog('🛒 Purchase Started', `<@${userId}> started a purchase: **${data.quantity}** of **${data.product}** (${data.total}) via **${paymentName}**.`, 0x00ff88);
-        pendingPurchases.delete(userId);
-        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
-      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
-      return;
-    }
-
-    if (cid === 'move_ticket_select') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const tickets = await getTickets();
-      const ticket = tickets[i.channelId];
-      if (!ticket) return i.editReply({ content: '❌ This is not an active ticket.' });
-      const newCategoryId = i.values[0];
-      const newCategoryName = ALLOWED_MOVE_CATEGORIES[newCategoryId];
-      try {
-        await i.channel.setParent(newCategoryId, { lockPermissions: false });
-        let newCatKey = null;
-        for (const [key, cat] of Object.entries(TICKET_CATEGORIES)) {
-          if (cat.categoryId === newCategoryId) { newCatKey = key; break; }
-        }
-        if (newCatKey) await updateTicketCategory(i.channelId, newCatKey);
-        await i.channel.send({ content: `📁 Ticket has been moved to **${newCategoryName}** by <@${i.user.id}>.` });
-        await i.editReply({ content: `✅ Moved to **${newCategoryName}**.` });
-      } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
-      return;
-    }
-
-    if (cid === 'store_edit_type') {
-      const type = i.values[0];
-      const store = await getStoreData();
-      if (type === 'section') {
-        const sections = Object.keys(store.sections);
-        if (!sections.length) return i.update({ content: '❌ No sections to edit.', components: [] });
-        const menu = new StringSelectMenuBuilder().setCustomId('edit_section_select').setPlaceholder('Select a section to edit').addOptions(sections.map(s => ({ label: s, value: s })));
-        return i.update({ content: '✏️ Which **section** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
-      }
-      if (type === 'service') {
-        const services = Object.keys(store.services);
-        if (!services.length) return i.update({ content: '❌ No services to edit.', components: [] });
-        const menu = new StringSelectMenuBuilder().setCustomId('edit_service_select').setPlaceholder('Select a service to edit').addOptions(services.map(s => ({ label: s, value: s })));
-        return i.update({ content: '✏️ Which **service** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
-      }
-      if (type === 'product') {
-        const products = Object.keys(store.products);
-        if (!products.length) return i.update({ content: '❌ No products to edit.', components: [] });
-        const menu = new StringSelectMenuBuilder().setCustomId('edit_product_select').setPlaceholder('Select a product to edit').addOptions(products.map(p => ({ label: p, value: p })));
-        return i.update({ content: '✏️ Which **product** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
-      }
-      if (type === 'price') {
-        const products = Object.keys(store.products);
-        if (!products.length) return i.update({ content: '❌ No products to edit.', components: [] });
-        const menu = new StringSelectMenuBuilder().setCustomId('edit_price_select').setPlaceholder('Select a product price to edit').addOptions(products.map(p => ({ label: p, value: p })));
-        return i.update({ content: '✏️ Which **price** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
-      }
-      return;
-    }
-
-    if (cid === 'edit_section_select') {
-      const section = i.values[0];
-      const modal = new ModalBuilder().setCustomId(`edit_section_modal_${section}`).setTitle('Edit Section');
-      const input = new TextInputBuilder().setCustomId('new_name').setLabel('New Section Name').setStyle(TextInputStyle.Short).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return i.showModal(modal);
-    }
-
-    if (cid === 'edit_service_select') {
-      const service = i.values[0];
-      const modal = new ModalBuilder().setCustomId(`edit_service_modal_${service}`).setTitle('Edit Service');
-      const input1 = new TextInputBuilder().setCustomId('new_name').setLabel('New Service Name').setStyle(TextInputStyle.Short).setValue(service).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input1));
-      await i.showModal(modal);
-      return;
-    }
-
-    if (cid === 'edit_product_select') {
-      const product = i.values[0];
-      const modal = new ModalBuilder().setCustomId(`edit_product_modal_${product}`).setTitle('Edit Product');
-      const input = new TextInputBuilder().setCustomId('new_name').setLabel('New Product Name').setStyle(TextInputStyle.Short).setValue(product).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return i.showModal(modal);
-    }
-
-    if (cid === 'edit_price_select') {
-      const product = i.values[0];
-      const store = await getStoreData();
-      const pd = store.products[product] || {};
-      const modal = new ModalBuilder().setCustomId(`edit_price_modal_${product}`).setTitle('Edit Price');
-      const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setValue(pd.price || '').setRequired(true);
-      const input2 = new TextInputBuilder().setCustomId('product_amount').setLabel('Amount (leave empty for single price)').setStyle(TextInputStyle.Short).setValue(pd.amount || '').setRequired(false);
-      const input3 = new TextInputBuilder().setCustomId('product_buy_cost').setLabel('Buy Cost (e.g. 2 or 0,50)').setStyle(TextInputStyle.Short).setValue(pd.buyCost || '').setRequired(false);
-      modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2), new ActionRowBuilder().addComponents(input3));
-      return i.showModal(modal);
-    }
-  }
-
-  if (i.isButton()) {
-    const cid = i.customId;
-
-    if (cid.startsWith('link_channel_btn_')) {
-      const serviceName = cid.replace('link_channel_btn_', '');
-      const modal = new ModalBuilder().setCustomId(`link_channel_modal_${serviceName}`).setTitle('Link Channel');
-      const input = new TextInputBuilder()
-        .setCustomId('channel_input')
-        .setLabel('Channel (e.g. #streaming)')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('#channel-name or channel ID')
-        .setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return i.showModal(modal);
-    }
-
-    if (cid === 'store_add_section') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const modal = new ModalBuilder().setCustomId('modal_add_section').setTitle('Add Section');
-      const input = new TextInputBuilder().setCustomId('section_name').setLabel('Section Name').setStyle(TextInputStyle.Short).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return i.showModal(modal);
-    }
-
-    if (cid === 'store_add_service') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const store = await getStoreData();
-      const sections = Object.keys(store.sections);
-      if (!sections.length) return i.reply({ content: '❌ Add a section first.', flags: MessageFlags.Ephemeral });
-      const menu = new StringSelectMenuBuilder().setCustomId('select_section_for_service').setPlaceholder('Select a section').addOptions(sections.map(s => ({ label: s, value: s })));
-      return i.reply({ content: 'Which section does this service belong to?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid === 'store_add_product') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const store = await getStoreData();
-      const services = Object.keys(store.services);
-      if (!services.length) return i.reply({ content: '❌ Add a service first.', flags: MessageFlags.Ephemeral });
-      const menu = new StringSelectMenuBuilder().setCustomId('select_service_for_product').setPlaceholder('Select a service').addOptions(services.map(s => ({ label: s, value: s })));
-      return i.reply({ content: 'Which service does this product belong to?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid === 'store_add_price') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const store = await getStoreData();
-      const products = Object.keys(store.products);
-      if (!products.length) return i.reply({ content: '❌ Add a product first.', flags: MessageFlags.Ephemeral });
-      const menu = new StringSelectMenuBuilder().setCustomId('select_product_for_price').setPlaceholder('Select a product').addOptions(products.map(p => ({ label: p, value: p })));
-      return i.reply({ content: 'Which product do you want to set a price for?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid === 'store_remove') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const menu = new StringSelectMenuBuilder().setCustomId('store_remove_type').setPlaceholder('What do you want to remove?')
-        .addOptions([
-          { label: 'Section', value: 'section', emoji: '🔹' },
-          { label: 'Service', value: 'service', emoji: '🔧' },
-          { label: 'Product', value: 'product', emoji: '📦' },
-          { label: 'Price', value: 'price', emoji: '💰' },
-        ]);
-      return i.reply({ content: '🗑️ What do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid === 'store_edit') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const menu = new StringSelectMenuBuilder().setCustomId('store_edit_type').setPlaceholder('What do you want to edit?')
-        .addOptions([
-          { label: 'Section', value: 'section', emoji: '🔹' },
-          { label: 'Service', value: 'service', emoji: '🔧' },
-          { label: 'Product', value: 'product', emoji: '📦' },
-          { label: 'Price', value: 'price', emoji: '💰' },
-        ]);
-      return i.reply({ content: '✏️ What do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid === 'verify_accept_rules') {
-      if (i.member.roles.cache.has(VERIFIED_ROLE_ID)) return i.reply({ content: '❌ You are already verified!', flags: MessageFlags.Ephemeral });
-      try {
-        await i.member.roles.add(VERIFIED_ROLE_ID);
-        await i.reply({ content: '✅ You have accepted the rules and are now verified!', flags: MessageFlags.Ephemeral });
-        await updateVerifyMessage();
-      } catch (e) { await i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
-      return;
-    }
-
-    if (cid === 'legit_approve') {
-      try {
-        const votes = await getLegitVotes();
-        votes.approve = votes.approve.filter(id => id !== i.user.id);
-        votes.reject = votes.reject.filter(id => id !== i.user.id);
-        votes.approve.push(i.user.id);
-        const confirmed = await getConfirmedRejects();
-        const newConfirmed = confirmed.filter(id => id !== i.user.id);
-        if (newConfirmed.length !== confirmed.length) await saveConfirmedRejects(newConfirmed);
-        await saveLegitVotes(votes);
-        await setupLegit();
-        try { await i.user.send({ content: `✅ Your vote has been saved as **Legit**.` }); } catch (err) {}
-        await i.reply({ content: '✅ Your vote has been saved as **Legit**.', flags: MessageFlags.Ephemeral });
-      } catch (e) { await i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
-      return;
-    }
-
-    if (cid === 'legit_reject') {
-      try {
-        const guild = await client.guilds.fetch(GUILD_ID);
-        const tickets = await getTickets();
-        const existing = Object.entries(tickets).find(([_, t]) => t.userId === i.user.id && t.categorie === 'notlegit');
-        if (existing) return i.reply({ content: `❌ You already have an open proof ticket: <#${existing[0]}>.`, flags: MessageFlags.Ephemeral });
-        await i.deferReply({ flags: MessageFlags.Ephemeral });
-        const cat = TICKET_CATEGORIES.notlegit;
-        const channelName = `notlegit-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
-        const ticketChannel = await guild.channels.create({
-          name: channelName, type: ChannelType.GuildText, parent: NOT_LEGIT_TICKET_CATEGORY_ID,
-          permissionOverwrites: [
+      if (cid === 'purchase_payment') {
+        const data = pendingPurchases.get(userId);
+        if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
+        data.payment = i.values[0];
+        const paymentName = PAYMENT_METHODS[data.payment];
+        await i.update({ content: '✅ Creating your ticket...', components: [] });
+        try {
+          const guild = i.guild;
+          const tickets = await getTickets();
+          if (Object.values(tickets).find(t => t.userId === userId)) { pendingPurchases.delete(userId); return i.editReply({ content: '❌ You already have an open ticket.' }); }
+          const cat = TICKET_CATEGORIES.purchase;
+          const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
+          const overwrites = [
             { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-            { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
-            { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory] },
+            { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+            { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
             { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
-          ],
-          topic: `Not-Legit proof from ${i.user.tag}`,
-        });
-        await addTicket(ticketChannel.id, i.user.id, 'notlegit');
-        const notLegitStore = await getNotLegitTickets();
-        notLegitStore[ticketChannel.id] = { userId: i.user.id, status: 'pending', createdAt: Date.now() };
-        await saveNotLegitTickets(notLegitStore);
-        const stats = await getTicketStats();
-        stats.total += 1;
-        await saveTicketStats(stats);
-        await updateTicketStats();
-        const promptEmbed = new EmbedBuilder().setTitle('Upload proof').setColor(0xff4444).setThumbnail(LOGO)
-          .setDescription(`Please upload your proof here (screenshots, video, files).\n\nStaff will review it and click **Positive** or **False**.`)
-          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-        const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-        const reviewRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('notlegit_positive').setLabel('Positive').setEmoji('✅').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId('notlegit_false').setLabel('False').setEmoji('❌').setStyle(ButtonStyle.Danger)
-        );
-        await ticketChannel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [promptEmbed], components: [reviewRow, closeRow] });
-        await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
-        try { await i.user.send({ content: `❌ Your vote has been saved as **Not Legit**. Please upload your proof in the ticket that was just created for you.` }); } catch (err) {}
-      } catch (e) { try { await i.editReply({ content: `❌ Error: ${e.message}` }); } catch (_) {} }
-      return;
-    }
-
-    if (cid === 'notlegit_positive' || cid === 'notlegit_false') {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ Only staff can review this.', flags: MessageFlags.Ephemeral });
-      await i.deferReply({ flags: MessageFlags.Ephemeral });
-      const nlt = await getNotLegitTickets();
-      const entry = nlt[i.channelId];
-      const tickets = await getTickets();
-      const ticket = tickets[i.channelId];
-      if (!entry || !ticket || ticket.categorie !== 'notlegit') return i.editReply({ content: '❌ This is not an active Not-Legit proof ticket.' });
-      if (entry.status !== 'pending') return i.editReply({ content: `❌ Already reviewed as **${entry.status}**.` });
-      try {
-        const targetUserId = entry.userId;
-        const votes = await getLegitVotes();
-        const confirmed = await getConfirmedRejects();
-        if (cid === 'notlegit_positive') {
-          if (!votes.reject.includes(targetUserId)) votes.reject.push(targetUserId);
-          if (!confirmed.includes(targetUserId)) confirmed.push(targetUserId);
-          await saveLegitVotes(votes);
-          await saveConfirmedRejects(confirmed);
-          await setNotLegitStatus(i.channelId, 'positive');
-          await setupLegit();
-          await i.channel.send({ content: `✅ Reviewed as **Positive**. ❌ vote added. Closing ticket...` });
-          await i.editReply({ content: '✅ Reviewed as **Positive**. Closing ticket...' });
-        } else {
-          await setNotLegitStatus(i.channelId, 'false');
-          await i.channel.send({ content: `❌ Reviewed as **False**. No vote added. Closing ticket...` });
-          await i.editReply({ content: '❌ Reviewed as **False**. Closing ticket...' });
-        }
-        await closeTicket(i.channel, i.user.id);
-      } catch (e) { try { await i.editReply({ content: `❌ Error: ${e.message}` }); } catch (_) {} }
-      return;
-    }
-
-    if (cid === 'ticket_close') {
-      const tickets = await getTickets();
-      const ticket = tickets[i.channelId];
-      if (!ticket) return i.reply({ content: '❌ No active ticket.', flags: MessageFlags.Ephemeral });
-      if (ticket.userId !== i.user.id && !isStaff(i.member)) return i.reply({ content: '❌ You cannot close this ticket.', flags: MessageFlags.Ephemeral });
-      await i.reply({ content: '🔒 Closing ticket...' });
-      await closeTicket(i.channel, i.user.id);
-      return;
-    }
-
-    if (cid === 'giveaway_join') {
-      const giveaways = await getGiveaways();
-      const giveaway = giveaways[i.message.id];
-      if (!giveaway || !giveaway.active) return i.reply({ content: '❌ This giveaway has ended.', flags: MessageFlags.Ephemeral });
-      if (giveaway.blacklistRoles?.some(roleId => i.member.roles.cache.has(roleId))) return i.reply({ content: '❌ You are not eligible to join this giveaway.', flags: MessageFlags.Ephemeral });
-      if (giveaway.participants.includes(i.user.id)) return i.reply({ content: '❌ You have already joined this giveaway!', flags: MessageFlags.Ephemeral });
-      giveaway.participants.push(i.user.id);
-      await saveGiveaways(giveaways);
-      return i.reply({ content: '✅ You have joined the giveaway! Good luck!', flags: MessageFlags.Ephemeral });
-    }
-
-    if (cid.startsWith('giveaway_reroll_')) {
-      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
-      const messageId = cid.replace('giveaway_reroll_', '');
-      const modal = new ModalBuilder().setCustomId(`giveaway_reroll_modal_${messageId}`).setTitle('Reroll Giveaway');
-      const input = new TextInputBuilder().setCustomId('reroll_amount').setLabel('How many winners do you want to reroll?').setStyle(TextInputStyle.Short).setRequired(true);
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return i.showModal(modal);
-    }
-
-    if (cid === 'invite_get_link') {
-      try {
-        const guild = i.guild;
-        const invites = await guild.invites.fetch();
-        let userInvite = invites.find(inv => inv.inviter?.id === i.user.id);
-        if (!userInvite) {
-          const channel = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.permissionsFor(guild.members.me).has(PermissionFlagsBits.CreateInstantInvite));
-          if (channel) userInvite = await channel.createInvite({ maxAge: 0, maxUses: 0, unique: true, reason: 'Personal invite link' });
-        }
-        if (userInvite) {
-          await i.user.send({ content: `Here is your personal invite link: https://discord.gg/${userInvite.code}` }).catch(() => {});
-          return i.reply({ content: '✅ I sent your personal invite link in DM!', flags: MessageFlags.Ephemeral });
-        }
-        return i.reply({ content: '❌ Could not create an invite. Please contact staff.', flags: MessageFlags.Ephemeral });
-      } catch (e) { return i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
-    }
-
-    if (cid === 'invite_check') {
-      const invites = await getUserInvites();
-      const userData = invites[i.user.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
-      const tens = Math.floor(userData.valid / 10);
-      const fives = Math.floor((userData.valid % 10) / 5);
-      let rewardText = '0 rewards';
-      if (tens > 0 || fives > 0) {
-        const parts = [];
-        if (tens > 0) parts.push(`${tens}x 10%`);
-        if (fives > 0) parts.push(`${fives}x 5%`);
-        rewardText = parts.join(' + ');
+          ];
+          const ticketChannel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}` });
+          await addTicket(ticketChannel.id, userId, 'purchase', { section: data.section, service: data.service, product: data.product, quantity: data.quantity, total: data.total, payment: data.payment });
+          const customerTickets = await getCustomerTickets();
+          customerTickets[userId] = (customerTickets[userId] || 0) + 1;
+          await saveCustomerTickets(customerTickets);
+          const stats = await getTicketStats();
+          stats.total += 1;
+          await saveTicketStats(stats);
+          await updateTicketStats();
+          const embed = new EmbedBuilder().setTitle('🛒 Purchase Details').setColor(0x00ff88).setThumbnail(LOGO)
+            .setDescription(`Thank you for your order, <@${userId}>! Please wait for a staff member to assist you.`)
+            .addFields(
+              { name: 'Section', value: data.section, inline: true },
+              { name: 'Service', value: data.service, inline: true },
+              { name: 'Product', value: data.product, inline: true },
+              { name: 'Quantity', value: `${data.quantity}`, inline: true },
+              { name: 'Total Price', value: data.total, inline: true },
+              { name: 'Payment Method', value: paymentName, inline: true }
+            ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+          const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+          await ticketChannel.send({ content: `<@${userId}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
+          await sendLog('🛒 Purchase Started', `<@${userId}> started a purchase: **${data.quantity}** of **${data.product}** (${data.total}) via **${paymentName}**.`, 0x00ff88);
+          pendingPurchases.delete(userId);
+          await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
+        } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+        return;
       }
-      const embed = new EmbedBuilder().setTitle('📊 Your Invites').setColor(0xffaa00).setThumbnail(i.user.displayAvatarURL())
-        .addFields(
-          { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
-          { name: 'Available Rewards', value: rewardText, inline: true }
-        ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-      return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+
+      if (cid === 'move_ticket_select') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const tickets = await getTickets();
+        const ticket = tickets[i.channelId];
+        if (!ticket) return i.editReply({ content: '❌ This is not an active ticket.' });
+        const newCategoryId = i.values[0];
+        const newCategoryName = ALLOWED_MOVE_CATEGORIES[newCategoryId];
+        try {
+          await i.channel.setParent(newCategoryId, { lockPermissions: false });
+          let newCatKey = null;
+          for (const [key, cat] of Object.entries(TICKET_CATEGORIES)) {
+            if (cat.categoryId === newCategoryId) { newCatKey = key; break; }
+          }
+          if (newCatKey) await updateTicketCategory(i.channelId, newCatKey);
+          await i.channel.send({ content: `📁 Ticket has been moved to **${newCategoryName}** by <@${i.user.id}>.` });
+          await i.editReply({ content: `✅ Moved to **${newCategoryName}**.` });
+        } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+        return;
+      }
+
+      if (cid === 'store_edit_type') {
+        const type = i.values[0];
+        const store = await getStoreData();
+        if (type === 'section') {
+          const sections = Object.keys(store.sections);
+          if (!sections.length) return i.update({ content: '❌ No sections to edit.', components: [] });
+          const menu = new StringSelectMenuBuilder().setCustomId('edit_section_select').setPlaceholder('Select a section to edit').addOptions(sections.map(s => ({ label: s, value: s })));
+          return i.update({ content: '✏️ Which **section** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
+        }
+        if (type === 'service') {
+          const services = Object.keys(store.services);
+          if (!services.length) return i.update({ content: '❌ No services to edit.', components: [] });
+          const menu = new StringSelectMenuBuilder().setCustomId('edit_service_select').setPlaceholder('Select a service to edit').addOptions(services.map(s => ({ label: s, value: s })));
+          return i.update({ content: '✏️ Which **service** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
+        }
+        if (type === 'product') {
+          const products = Object.keys(store.products);
+          if (!products.length) return i.update({ content: '❌ No products to edit.', components: [] });
+          const menu = new StringSelectMenuBuilder().setCustomId('edit_product_select').setPlaceholder('Select a product to edit').addOptions(products.map(p => ({ label: p, value: p })));
+          return i.update({ content: '✏️ Which **product** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
+        }
+        if (type === 'price') {
+          const products = Object.keys(store.products);
+          if (!products.length) return i.update({ content: '❌ No products to edit.', components: [] });
+          const menu = new StringSelectMenuBuilder().setCustomId('edit_price_select').setPlaceholder('Select a product price to edit').addOptions(products.map(p => ({ label: p, value: p })));
+          return i.update({ content: '✏️ Which **price** do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)] });
+        }
+        return;
+      }
+
+      if (cid === 'edit_section_select') {
+        const section = i.values[0];
+        const modal = new ModalBuilder().setCustomId(`edit_section_modal_${section}`).setTitle('Edit Section');
+        const input = new TextInputBuilder().setCustomId('new_name').setLabel('New Section Name').setStyle(TextInputStyle.Short).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return i.showModal(modal);
+      }
+
+      if (cid === 'edit_service_select') {
+        const service = i.values[0];
+        const modal = new ModalBuilder().setCustomId(`edit_service_modal_${service}`).setTitle('Edit Service');
+        const input1 = new TextInputBuilder().setCustomId('new_name').setLabel('New Service Name').setStyle(TextInputStyle.Short).setValue(service).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input1));
+        await i.showModal(modal);
+        return;
+      }
+
+      if (cid === 'edit_product_select') {
+        const product = i.values[0];
+        const modal = new ModalBuilder().setCustomId(`edit_product_modal_${product}`).setTitle('Edit Product');
+        const input = new TextInputBuilder().setCustomId('new_name').setLabel('New Product Name').setStyle(TextInputStyle.Short).setValue(product).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return i.showModal(modal);
+      }
+
+      if (cid === 'edit_price_select') {
+        const product = i.values[0];
+        const store = await getStoreData();
+        const pd = store.products[product] || {};
+        const modal = new ModalBuilder().setCustomId(`edit_price_modal_${product}`).setTitle('Edit Price');
+        const input1 = new TextInputBuilder().setCustomId('product_price').setLabel('Price (e.g. 5 or 0,75)').setStyle(TextInputStyle.Short).setValue(pd.price || '').setRequired(true);
+        const input2 = new TextInputBuilder().setCustomId('product_amount').setLabel('Amount (leave empty for single price)').setStyle(TextInputStyle.Short).setValue(pd.amount || '').setRequired(false);
+        const input3 = new TextInputBuilder().setCustomId('product_buy_cost').setLabel('Buy Cost (e.g. 2 or 0,50)').setStyle(TextInputStyle.Short).setValue(pd.buyCost || '').setRequired(false);
+        modal.addComponents(new ActionRowBuilder().addComponents(input1), new ActionRowBuilder().addComponents(input2), new ActionRowBuilder().addComponents(input3));
+        return i.showModal(modal);
+      }
     }
+
+    if (i.isButton()) {
+      const cid = i.customId;
+
+      if (cid.startsWith('link_channel_btn_')) {
+        const serviceName = cid.replace('link_channel_btn_', '');
+        const modal = new ModalBuilder().setCustomId(`link_channel_modal_${serviceName}`).setTitle('Link Channel');
+        const input = new TextInputBuilder()
+          .setCustomId('channel_input')
+          .setLabel('Channel (e.g. #streaming)')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('#channel-name or channel ID')
+          .setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return i.showModal(modal);
+      }
+
+      if (cid === 'store_add_section') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        const modal = new ModalBuilder().setCustomId('modal_add_section').setTitle('Add Section');
+        const input = new TextInputBuilder().setCustomId('section_name').setLabel('Section Name').setStyle(TextInputStyle.Short).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return i.showModal(modal);
+      }
+
+      if (cid === 'store_add_service') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        const store = await getStoreData();
+        const sections = Object.keys(store.sections);
+        if (!sections.length) return i.reply({ content: '❌ Add a section first.', flags: MessageFlags.Ephemeral });
+        const menu = new StringSelectMenuBuilder().setCustomId('select_section_for_service').setPlaceholder('Select a section').addOptions(sections.map(s => ({ label: s, value: s })));
+        return i.reply({ content: 'Which section does this service belong to?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid === 'store_add_product') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        const store = await getStoreData();
+        const services = Object.keys(store.services);
+        if (!services.length) return i.reply({ content: '❌ Add a service first.', flags: MessageFlags.Ephemeral });
+        const menu = new StringSelectMenuBuilder().setCustomId('select_service_for_product').setPlaceholder('Select a service').addOptions(services.map(s => ({ label: s, value: s })));
+        return i.reply({ content: 'Which service does this product belong to?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid === 'store_add_price') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        const store = await getStoreData();
+        const products = Object.keys(store.products);
+        if (!products.length) return i.reply({ content: '❌ Add a product first.', flags: MessageFlags.Ephemeral });
+        const menu = new StringSelectMenuBuilder().setCustomId('select_product_for_price').setPlaceholder('Select a product').addOptions(products.map(p => ({ label: p, value: p })));
+        return i.reply({ content: 'Which product do you want to set a price for?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid === 'store_remove') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        const menu = new StringSelectMenuBuilder().setCustomId('store_remove_type').setPlaceholder('What do you want to remove?')
+          .addOptions([
+            { label: 'Section', value: 'section', emoji: '🔹' },
+            { label: 'Service', value: 'service', emoji: '🔧' },
+            { label: 'Product', value: 'product', emoji: '📦' },
+            { label: 'Price', value: 'price', emoji: '💰' },
+          ]);
+        return i.reply({ content: '🗑️ What do you want to remove?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid === 'store_edit') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        const menu = new StringSelectMenuBuilder().setCustomId('store_edit_type').setPlaceholder('What do you want to edit?')
+          .addOptions([
+            { label: 'Section', value: 'section', emoji: '🔹' },
+            { label: 'Service', value: 'service', emoji: '🔧' },
+            { label: 'Product', value: 'product', emoji: '📦' },
+            { label: 'Price', value: 'price', emoji: '💰' },
+          ]);
+        return i.reply({ content: '✏️ What do you want to edit?', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid === 'verify_accept_rules') {
+        if (i.member.roles.cache.has(VERIFIED_ROLE_ID)) return i.reply({ content: '❌ You are already verified!', flags: MessageFlags.Ephemeral });
+        try {
+          await i.member.roles.add(VERIFIED_ROLE_ID);
+          await i.reply({ content: '✅ You have accepted the rules and are now verified!', flags: MessageFlags.Ephemeral });
+          await updateVerifyMessage();
+        } catch (e) { await i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
+        return;
+      }
+
+      if (cid === 'legit_approve') {
+        try {
+          const votes = await getLegitVotes();
+          votes.approve = votes.approve.filter(id => id !== i.user.id);
+          votes.reject = votes.reject.filter(id => id !== i.user.id);
+          votes.approve.push(i.user.id);
+          const confirmed = await getConfirmedRejects();
+          const newConfirmed = confirmed.filter(id => id !== i.user.id);
+          if (newConfirmed.length !== confirmed.length) await saveConfirmedRejects(newConfirmed);
+          await saveLegitVotes(votes);
+          await setupLegit();
+          try { await i.user.send({ content: `✅ Your vote has been saved as **Legit**.` }); } catch (err) {}
+          await i.reply({ content: '✅ Your vote has been saved as **Legit**.', flags: MessageFlags.Ephemeral });
+        } catch (e) { await i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
+        return;
+      }
+
+      if (cid === 'legit_reject') {
+        try {
+          const guild = await client.guilds.fetch(GUILD_ID);
+          const tickets = await getTickets();
+          const existing = Object.entries(tickets).find(([_, t]) => t.userId === i.user.id && t.categorie === 'notlegit');
+          if (existing) return i.reply({ content: `❌ You already have an open proof ticket: <#${existing[0]}>.`, flags: MessageFlags.Ephemeral });
+          await i.deferReply({ flags: MessageFlags.Ephemeral });
+          const cat = TICKET_CATEGORIES.notlegit;
+          const channelName = `notlegit-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 90);
+          const ticketChannel = await guild.channels.create({
+            name: channelName, type: ChannelType.GuildText, parent: NOT_LEGIT_TICKET_CATEGORY_ID,
+            permissionOverwrites: [
+              { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+              { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+              { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory] },
+              { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
+            ],
+            topic: `Not-Legit proof from ${i.user.tag}`,
+          });
+          await addTicket(ticketChannel.id, i.user.id, 'notlegit');
+          const notLegitStore = await getNotLegitTickets();
+          notLegitStore[ticketChannel.id] = { userId: i.user.id, status: 'pending', createdAt: Date.now() };
+          await saveNotLegitTickets(notLegitStore);
+          const stats = await getTicketStats();
+          stats.total += 1;
+          await saveTicketStats(stats);
+          await updateTicketStats();
+          const promptEmbed = new EmbedBuilder().setTitle('Upload proof').setColor(0xff4444).setThumbnail(LOGO)
+            .setDescription(`Please upload your proof here (screenshots, video, files).\n\nStaff will review it and click **Positive** or **False**.`)
+            .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+          const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+          const reviewRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('notlegit_positive').setLabel('Positive').setEmoji('✅').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('notlegit_false').setLabel('False').setEmoji('❌').setStyle(ButtonStyle.Danger)
+          );
+          await ticketChannel.send({ content: `<@${i.user.id}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [promptEmbed], components: [reviewRow, closeRow] });
+          await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
+          try { await i.user.send({ content: `❌ Your vote has been saved as **Not Legit**. Please upload your proof in the ticket that was just created for you.` }); } catch (err) {}
+        } catch (e) { try { await i.editReply({ content: `❌ Error: ${e.message}` }); } catch (_) {} }
+        return;
+      }
+
+      if (cid === 'notlegit_positive' || cid === 'notlegit_false') {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ Only staff can review this.', flags: MessageFlags.Ephemeral });
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const nlt = await getNotLegitTickets();
+        const entry = nlt[i.channelId];
+        const tickets = await getTickets();
+        const ticket = tickets[i.channelId];
+        if (!entry || !ticket || ticket.categorie !== 'notlegit') return i.editReply({ content: '❌ This is not an active Not-Legit proof ticket.' });
+        if (entry.status !== 'pending') return i.editReply({ content: `❌ Already reviewed as **${entry.status}**.` });
+        try {
+          const targetUserId = entry.userId;
+          const votes = await getLegitVotes();
+          const confirmed = await getConfirmedRejects();
+          if (cid === 'notlegit_positive') {
+            if (!votes.reject.includes(targetUserId)) votes.reject.push(targetUserId);
+            if (!confirmed.includes(targetUserId)) confirmed.push(targetUserId);
+            await saveLegitVotes(votes);
+            await saveConfirmedRejects(confirmed);
+            await setNotLegitStatus(i.channelId, 'positive');
+            await setupLegit();
+            await i.channel.send({ content: `✅ Reviewed as **Positive**. ❌ vote added. Closing ticket...` });
+            await i.editReply({ content: '✅ Reviewed as **Positive**. Closing ticket...' });
+          } else {
+            await setNotLegitStatus(i.channelId, 'false');
+            await i.channel.send({ content: `❌ Reviewed as **False**. No vote added. Closing ticket...` });
+            await i.editReply({ content: '❌ Reviewed as **False**. Closing ticket...' });
+          }
+          await closeTicket(i.channel, i.user.id);
+        } catch (e) { try { await i.editReply({ content: `❌ Error: ${e.message}` }); } catch (_) {} }
+        return;
+      }
+
+      if (cid === 'ticket_close') {
+        const tickets = await getTickets();
+        const ticket = tickets[i.channelId];
+        if (!ticket) return i.reply({ content: '❌ No active ticket.', flags: MessageFlags.Ephemeral });
+        if (ticket.userId !== i.user.id && !isStaff(i.member)) return i.reply({ content: '❌ You cannot close this ticket.', flags: MessageFlags.Ephemeral });
+        await i.reply({ content: '🔒 Closing ticket...' });
+        await closeTicket(i.channel, i.user.id);
+        return;
+      }
+
+      if (cid === 'giveaway_join') {
+        const giveaways = await getGiveaways();
+        const giveaway = giveaways[i.message.id];
+        if (!giveaway || !giveaway.active) return i.reply({ content: '❌ This giveaway has ended.', flags: MessageFlags.Ephemeral });
+        if (giveaway.blacklistRoles?.some(roleId => i.member.roles.cache.has(roleId))) return i.reply({ content: '❌ You are not eligible to join this giveaway.', flags: MessageFlags.Ephemeral });
+        if (giveaway.participants.includes(i.user.id)) return i.reply({ content: '❌ You have already joined this giveaway!', flags: MessageFlags.Ephemeral });
+        giveaway.participants.push(i.user.id);
+        await saveGiveaways(giveaways);
+        return i.reply({ content: '✅ You have joined the giveaway! Good luck!', flags: MessageFlags.Ephemeral });
+      }
+
+      if (cid.startsWith('giveaway_reroll_')) {
+        if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+        const messageId = cid.replace('giveaway_reroll_', '');
+        const modal = new ModalBuilder().setCustomId(`giveaway_reroll_modal_${messageId}`).setTitle('Reroll Giveaway');
+        const input = new TextInputBuilder().setCustomId('reroll_amount').setLabel('How many winners do you want to reroll?').setStyle(TextInputStyle.Short).setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return i.showModal(modal);
+      }
+
+      if (cid === 'invite_get_link') {
+        try {
+          const guild = i.guild;
+          const invites = await guild.invites.fetch();
+          let userInvite = invites.find(inv => inv.inviter?.id === i.user.id);
+          if (!userInvite) {
+            const channel = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.permissionsFor(guild.members.me).has(PermissionFlagsBits.CreateInstantInvite));
+            if (channel) userInvite = await channel.createInvite({ maxAge: 0, maxUses: 0, unique: true, reason: 'Personal invite link' });
+          }
+          if (userInvite) {
+            await i.user.send({ content: `Here is your personal invite link: https://discord.gg/${userInvite.code}` }).catch(() => {});
+            return i.reply({ content: '✅ I sent your personal invite link in DM!', flags: MessageFlags.Ephemeral });
+          }
+          return i.reply({ content: '❌ Could not create an invite. Please contact staff.', flags: MessageFlags.Ephemeral });
+        } catch (e) { return i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral }); }
+      }
+
+      if (cid === 'invite_check') {
+        const invites = await getUserInvites();
+        const userData = invites[i.user.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
+        const tens = Math.floor(userData.valid / 10);
+        const fives = Math.floor((userData.valid % 10) / 5);
+        let rewardText = '0 rewards';
+        if (tens > 0 || fives > 0) {
+          const parts = [];
+          if (tens > 0) parts.push(`${tens}x 10%`);
+          if (fives > 0) parts.push(`${fives}x 5%`);
+          rewardText = parts.join(' + ');
+        }
+        const embed = new EmbedBuilder().setTitle('📊 Your Invites').setColor(0xffaa00).setThumbnail(i.user.displayAvatarURL())
+          .addFields(
+            { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
+            { name: 'Available Rewards', value: rewardText, inline: true }
+          ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+        return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      }
+    }
+  } catch (err) {
+    console.error('[INTERACTION CRASH]', err);
+    try {
+      if (i.deferred || i.replied) await i.followUp({ content: `❌ Something went wrong: ${err.message}`, flags: MessageFlags.Ephemeral });
+      else await i.reply({ content: `❌ Something went wrong: ${err.message}`, flags: MessageFlags.Ephemeral });
+    } catch (_) {}
   }
 });
 
