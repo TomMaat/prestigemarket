@@ -61,6 +61,7 @@ const SPENT_ROLES = [
 
 const NOT_LEGIT_TICKET_CATEGORY_ID = '1564632244235014315';
 const ARCHIVE_CATEGORY_ID = '1564636952676802700';
+const PAYED_ORDERS_CATEGORY_ID = '1565462973282263161';
 const PARTNER_CATEGORY_ID = '1565123254887252229';
 
 const TICKET_CATEGORIES = {
@@ -77,6 +78,7 @@ const ALLOWED_MOVE_CATEGORIES = {
   '1564627295816122418': 'Bug',
   '1564632244235014315': 'Not Legit Proof',
   '1564636952676802700': 'Other/Archive',
+  '1565462973282263161': 'Payed Orders',
   '1565123254887252229': 'Partner'
 };
 
@@ -525,30 +527,80 @@ async function runGiveaway(channel, winners, product, durationMs, blacklistRoles
 }
 
 // ===== Store =====
-function buildStoreEmbed(store) {
-  const embed = new EmbedBuilder().setTitle('🛒 Store Management').setColor(0x5865f2).setThumbnail(LOGO).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-  if (!Object.keys(store.sections).length) { embed.setDescription('*No sections configured yet.*\n\nUse the buttons below to add sections, services, and products.'); return embed; }
+function buildStoreEmbeds(store) {
+  const embeds = [];
+
+  const header = new EmbedBuilder()
+    .setTitle('🛒 Store Management')
+    .setColor(0x5865f2)
+    .setThumbnail(LOGO)
+    .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+    .setTimestamp();
+
+  if (!Object.keys(store.sections).length) {
+    header.setDescription('*No sections configured yet.*\n\nUse the buttons below to add sections, services, and products.');
+    return [header];
+  }
+
+  header.setDescription('Below are all sections with their services and products.\nUse the buttons to manage the store.');
+  embeds.push(header);
+
   for (const [section, services] of Object.entries(store.sections)) {
-    let sectionText = '';
-    if (!services.length) sectionText += `↳ *No services*\n`;
-    else services.forEach(service => {
-      sectionText += `• **${service}**\n`;
+    const sectionEmbed = new EmbedBuilder()
+      .setTitle(`🔹 ${section}`)
+      .setColor(0x2b2b2b)
+      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+      .setTimestamp();
+
+    if (!services.length) {
+      sectionEmbed.setDescription('*No services configured.*');
+      embeds.push(sectionEmbed);
+      continue;
+    }
+
+    const chunks = [];
+    let current = '';
+
+    for (const service of services) {
+      let serviceBlock = `• **${service}**\n`;
       const products = store.services[service] || [];
-      if (!products.length) sectionText += `  ↳ *No products*\n`;
-      else products.forEach(prod => {
-        sectionText += `  ↳ ${prod}\n`;
-        const p = store.products[prod];
-        const price = formatPrice(p?.price);
-        const amount = p?.amount ? ` per ${p.amount}` : '';
-        const buyCost = p?.buyCost ? ` (Buy: €${p.buyCost})` : '';
-        sectionText += `      ↳ 💰 ${price}${amount}${buyCost}\n\n`;
+
+      if (!products.length) {
+        serviceBlock += `  ↳ *No products*\n`;
+      } else {
+        for (const prod of products) {
+          const p = store.products[prod];
+          const price = formatPrice(p?.price);
+          const amount = p?.amount ? ` per ${p.amount}` : '';
+          const buyCost = p?.buyCost ? ` (Buy: €${p.buyCost})` : '';
+          serviceBlock += `  ↳ ${prod}\n      ↳ 💰 ${price}${amount}${buyCost}\n`;
+        }
+      }
+      serviceBlock += '\n';
+
+      if ((current + serviceBlock).length > 1000) {
+        if (current) chunks.push(current);
+        current = serviceBlock;
+      } else {
+        current += serviceBlock;
+      }
+    }
+    if (current) chunks.push(current);
+
+    chunks.forEach((chunk, idx) => {
+      sectionEmbed.addFields({
+        name: idx === 0 ? 'Services & Products' : `Services & Products (cont. ${idx + 1})`,
+        value: chunk.length > 1024 ? chunk.slice(0, 1000) + '\n...' : chunk,
+        inline: false
       });
     });
-    if (sectionText.length > 1024) sectionText = sectionText.slice(0, 1000) + '\n... *(truncated)*';
-    embed.addFields({ name: `🔹 ${section}`, value: sectionText || '*Empty*', inline: false });
+
+    embeds.push(sectionEmbed);
   }
-  return embed;
+
+  return embeds;
 }
+
 function buildStoreRows() {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('store_add_section').setLabel('Add Section').setEmoji('➕').setStyle(ButtonStyle.Primary),
@@ -568,7 +620,9 @@ async function setupStorePanel() {
     if (!ch) return console.error('❌ Store panel channel not found.');
     const fetched = await ch.messages.fetch({ limit: 50 }).catch(() => null);
     if (fetched) for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
-    const newMsg = await ch.send({ embeds: [buildStoreEmbed(await getStoreData())], components: buildStoreRows() });
+    const embeds = buildStoreEmbeds(await getStoreData());
+    const rows = buildStoreRows();
+    const newMsg = await ch.send({ embeds: embeds.slice(0, 10), components: rows });
     await setStorePanelMessageId(newMsg.id);
     console.log('✅ Store panel placed');
   } catch (e) { console.error('Store error:', e.message); }
@@ -581,7 +635,9 @@ async function updateStorePanel() {
     if (!messageId) return setupStorePanel();
     const msg = await ch.messages.fetch(messageId).catch(() => null);
     if (!msg) return setupStorePanel();
-    await msg.edit({ embeds: [buildStoreEmbed(await getStoreData())], components: buildStoreRows() });
+    const embeds = buildStoreEmbeds(await getStoreData());
+    const rows = buildStoreRows();
+    await msg.edit({ embeds: embeds.slice(0, 10), components: rows });
   } catch (e) { console.error('Store update error:', e.message); }
 }
 async function updateServiceShop(serviceName) {
@@ -2112,12 +2168,29 @@ client.once('ready', async () => {
   await updateTicketStats();
 
   const store = await getStoreData();
+
+  // Auto-link Streaming if it exists but has no channel
   if (store.services['Streaming'] && !store.serviceChannels?.['Streaming']) {
     if (!store.serviceChannels) store.serviceChannels = {};
     store.serviceChannels['Streaming'] = '1564628292269772892';
     await saveStoreData(store);
   }
-  if (store.serviceChannels) for (const serviceName of Object.keys(store.serviceChannels)) await updateServiceShop(serviceName);
+
+  // Clean orphan service channels (services that no longer exist)
+  let cleaned = false;
+  for (const serviceName of Object.keys(store.serviceChannels || {})) {
+    if (!store.services[serviceName]) {
+      delete store.serviceChannels[serviceName];
+      if (store.serviceMessages) delete store.serviceMessages[serviceName];
+      cleaned = true;
+    }
+  }
+  if (cleaned) await saveStoreData(store);
+
+  // Only update shops for services that still exist
+  for (const serviceName of Object.keys(store.serviceChannels || {})) {
+    if (store.services[serviceName]) await updateServiceShop(serviceName);
+  }
 });
 
 client.login(TOKEN);
