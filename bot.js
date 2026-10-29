@@ -782,8 +782,6 @@ async function refreshChannel(channel) {
 
 // ===== Commands =====
 const commands = [
-  { name: 'vouch', description: 'Leave a vouch for your last purchase', options: [
-      { name: 'extra', description: 'Extra information (optional)', type: 3, required: false } ] },
   { name: 'payment', description: 'Send the payment details for this ticket', options: [
       { name: 'link_or_crypto', description: 'Payment link (iDeal/Tikkie) or Crypto Address (LTC)', type: 3, required: false },
       { name: 'bank_account_number', description: 'Bank account number (IBAN) for Bank Transfer', type: 3, required: false },
@@ -835,7 +833,6 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 // ===== Interaction Handler =====
 client.on('interactionCreate', async (i) => {
-  // Global safety net so a crash never leaves the user without a reply
   const safeReply = async (content) => {
     try {
       if (i.deferred || i.replied) await i.editReply({ content });
@@ -859,74 +856,6 @@ client.on('interactionCreate', async (i) => {
         await i.deferReply({ flags: MessageFlags.Ephemeral });
         const result = await refreshChannel(i.channel);
         return i.editReply({ content: result ? `✅ Refreshed: **${result}**` : '❌ No panel/embed is configured for this channel.' });
-      }
-
-      if (name === 'vouch') {
-        console.log(`[VOUCH] start - user: ${i.user.id}, hasVouchRole: ${i.member?.roles.cache.has(VOUCH_ROLE_ID)}`);
-        await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
-
-        if (!i.member || !i.member.roles.cache.has(VOUCH_ROLE_ID)) {
-          return safeReply(`❌ You need the <@&${VOUCH_ROLE_ID}> role to use this command.`);
-        }
-
-        let history;
-        try {
-          history = await getCustomerHistory();
-        } catch (e) {
-          console.error('[VOUCH] history fetch error:', e);
-          return safeReply(`❌ Could not load your purchases. Please try again later.`);
-        }
-
-        const purchases = history[i.user.id] || [];
-        console.log(`[VOUCH] purchases found: ${purchases.length}`);
-        if (!purchases.length) return safeReply('❌ You have no purchases yet. You can only vouch after buying something.');
-
-        const last = purchases[purchases.length - 1];
-        const extra = i.options.getString('extra') || 'Great service!';
-        const productLabel = buildVouchProductLabel(last);
-        
-        // Force fetch user so tags render for everyone
-        const customerUser = await client.users.fetch(i.user.id).catch(() => i.user);
-        const customerTag = `<@${customerUser.id}>`;
-
-        let sellerTag = '*Unknown*';
-        if (last.sellerId) {
-          const sellerUser = await client.users.fetch(last.sellerId).catch(() => null);
-          sellerTag = sellerUser ? `<@${sellerUser.id}>` : `*Unknown*`;
-        }
-
-        const ch = await client.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
-        if (!ch) return safeReply('❌ Vouch channel not found. Please contact staff.');
-
-        let nummer = 1;
-        try {
-          nummer = (await readVouchCounter()) + 1;
-          await writeVouchCounter(nummer);
-          cachedVouches = nummer;
-        } catch (e) { console.error('[VOUCH] counter error:', e.message); }
-
-        const embed = new EmbedBuilder()
-          .setTitle(`Vouch #${nummer}`).setColor(0x00ff88).setThumbnail(LOGO)
-          .setAuthor({ name: i.user.displayName, iconURL: i.user.displayAvatarURL() })
-          .addFields(
-            { name: 'Product', value: productLabel, inline: true },
-            { name: 'Customer', value: customerTag, inline: true },
-            { name: 'Seller', value: sellerTag, inline: true },
-            { name: 'Extra', value: extra, inline: false }
-          ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-
-        try {
-          await ch.send({ embeds: [embed] });
-        } catch (e) {
-          console.error('[VOUCH] send to channel error:', e);
-          return safeReply(`❌ Could not post the vouch. Please contact staff.`);
-        }
-
-        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**${last.sellerId ? ` (seller: <@${last.sellerId}>)` : ''}.`, 0x00ff88);
-        try { await i.user.send({ content: `✅ Your vouch for **${productLabel}** has been posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (_) {}
-
-        console.log(`[VOUCH] success - vouch #${nummer}`);
-        return safeReply(`✅ Vouch posted for **${productLabel}**!`);
       }
 
       if (name === 'search') {
@@ -1213,17 +1142,30 @@ client.on('interactionCreate', async (i) => {
           await i.channel.setParent(ARCHIVE_CATEGORY_ID, { lockPermissions: false });
           const t = await getTickets();
           if (t[i.channelId]) { t[i.channelId].categorie = 'archived'; await saveTickets(t); }
+          
+          const confirmEmbed = new EmbedBuilder()
+            .setTitle('Did you receive your delivery?')
+            .setColor(0x00ff88)
+            .setDescription(`<@${ticket.userId}>, please confirm if you have successfully received your delivery.\nIf you click **Yes**, a vouch will be automatically posted.`)
+            .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+
+          const confirmRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`confirm_delivery_${ticket.userId}_${i.channelId}`).setLabel('Yes').setEmoji('✅').setStyle(ButtonStyle.Success)
+          );
+
+          await i.channel.send({ embeds: [confirmEmbed], components: [confirmRow] });
+
           const targetUser = await client.users.fetch(ticket.userId).catch(() => null);
           if (targetUser) {
             const dmEmbed = new EmbedBuilder().setTitle('Thank you for your purchase!').setColor(0x00ff88)
-              .setDescription(`Thank you for your purchase at **Prestige Market**!\n\nPlease consider leaving a vouch in <#${VOUCH_CHANNEL_ID}> to support us.`)
+              .setDescription(`Thank you for your purchase at **Prestige Market**!\n\nIf you want to support us, please confirm the delivery in the ticket to leave a vouch.`)
               .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-            const vouchButton = new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setLabel('Leave a Vouch').setStyle(ButtonStyle.Link).setURL(`https://discord.com/channels/${GUILD_ID}/${VOUCH_CHANNEL_ID}`)
+            const ticketButton = new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setLabel('Go to Ticket').setStyle(ButtonStyle.Link).setURL(`https://discord.com/channels/${GUILD_ID}/${i.channelId}`)
             );
-            await targetUser.send({ embeds: [dmEmbed], components: [vouchButton] }).catch(() => console.log('Could not DM user'));
+            await targetUser.send({ embeds: [dmEmbed], components: [ticketButton] }).catch(() => console.log('Could not DM user'));
           }
-          await i.channel.send({ content: `✅ Order delivered! Ticket moved to archive. Thank you for your purchase, <@${ticket.userId}>!` });
+
           await sendLog('📦 Order Delivered', `Order for <@${ticket.userId}> in <#${i.channelId}> marked as delivered by <@${i.user.id}>.`, 0x00ff88);
           return i.editReply({ content: '✅ Ticket archived and user notified.' });
         } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
@@ -1862,6 +1804,60 @@ client.on('interactionCreate', async (i) => {
 
     if (i.isButton()) {
       const cid = i.customId;
+
+      if (cid.startsWith('confirm_delivery_')) {
+        const [, , ticketUserId, ticketChannelId] = cid.split('_');
+        if (i.user.id !== ticketUserId) return i.reply({ content: '❌ You are not the customer of this ticket.', flags: MessageFlags.Ephemeral });
+        
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        
+        try {
+          const history = await getCustomerHistory();
+          const purchases = history[i.user.id] || [];
+          if (!purchases.length) return i.editReply({ content: '❌ Could not find your purchase.' });
+
+          const last = purchases[purchases.length - 1];
+          const productLabel = buildVouchProductLabel(last);
+          let sellerTag = '*Unknown*';
+          
+          if (last.sellerId) {
+            const sellerUser = await client.users.fetch(last.sellerId).catch(() => null);
+            sellerTag = sellerUser ? `<@${sellerUser.id}>` : `*Unknown*`;
+          }
+
+          const customerUser = await client.users.fetch(i.user.id).catch(() => i.user);
+          const customerTag = `<@${customerUser.id}>`;
+
+          const ch = await client.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
+          if (!ch) return i.editReply({ content: '❌ Vouch channel not found. Please contact staff.' });
+
+          let nummer = (await readVouchCounter()) + 1;
+          await writeVouchCounter(nummer);
+          cachedVouches = nummer;
+
+          const embed = new EmbedBuilder()
+            .setTitle(`Vouch #${nummer}`).setColor(0x00ff88).setThumbnail(LOGO)
+            .setAuthor({ name: customerUser.displayName, iconURL: customerUser.displayAvatarURL() })
+            .addFields(
+              { name: 'Product', value: productLabel, inline: true },
+              { name: 'Customer', value: customerTag, inline: true },
+              { name: 'Seller', value: sellerTag, inline: true }
+            ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+
+          await ch.send({ embeds: [embed] });
+          await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**${last.sellerId ? ` (seller: <@${last.sellerId}>)` : ''}.`, 0x00ff88);
+
+          await i.editReply({ content: '✅ Thank you! Your vouch has been posted.' });
+
+          const ticketChannel = await client.channels.fetch(ticketChannelId).catch(() => null);
+          if (ticketChannel) await ticketChannel.delete('Ticket fully confirmed and vouched.').catch(() => {});
+
+        } catch (e) {
+          console.error(e);
+          return i.editReply({ content: `❌ Error: ${e.message}` });
+        }
+        return;
+      }
 
       if (cid.startsWith('link_channel_btn_')) {
         const serviceName = cid.replace('link_channel_btn_', '');
