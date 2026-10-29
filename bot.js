@@ -1139,9 +1139,8 @@ client.on('interactionCreate', async (i) => {
               .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
             await recentChannel.send({ embeds: [paymentEmbed] });
           }
-          await i.channel.setParent(ARCHIVE_CATEGORY_ID, { lockPermissions: false });
-          const t = await getTickets();
-          if (t[i.channelId]) { t[i.channelId].categorie = 'archived'; await saveTickets(t); }
+          
+          // We sluiten de ticket NIET meer automatisch. We sturen de confirmatie-vraag.
           
           const confirmEmbed = new EmbedBuilder()
             .setTitle('Did you receive your delivery?')
@@ -1158,7 +1157,7 @@ client.on('interactionCreate', async (i) => {
           const targetUser = await client.users.fetch(ticket.userId).catch(() => null);
           if (targetUser) {
             const dmEmbed = new EmbedBuilder().setTitle('Thank you for your purchase!').setColor(0x00ff88)
-              .setDescription(`Thank you for your purchase at **Prestige Market**!\n\nIf you want to support us, please confirm the delivery in the ticket to leave a vouch.`)
+              .setDescription(`Thank you for your purchase at **Prestige Market**!\n\nMake sure to mark as delivered in the ticket to leave a vouch.`)
               .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
             const ticketButton = new ActionRowBuilder().addComponents(
               new ButtonBuilder().setLabel('Go to Ticket').setStyle(ButtonStyle.Link).setURL(`https://discord.com/channels/${GUILD_ID}/${i.channelId}`)
@@ -1167,7 +1166,7 @@ client.on('interactionCreate', async (i) => {
           }
 
           await sendLog('📦 Order Delivered', `Order for <@${ticket.userId}> in <#${i.channelId}> marked as delivered by <@${i.user.id}>.`, 0x00ff88);
-          return i.editReply({ content: '✅ Ticket archived and user notified.' });
+          return i.editReply({ content: '✅ Delivery logged and user notified. Waiting for customer to confirm.' });
         } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
       }
 
@@ -1847,10 +1846,13 @@ client.on('interactionCreate', async (i) => {
           await ch.send({ embeds: [embed] });
           await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**${last.sellerId ? ` (seller: <@${last.sellerId}>)` : ''}.`, 0x00ff88);
 
-          await i.editReply({ content: '✅ Thank you! Your vouch has been posted.' });
-
+          await i.editReply({ content: '✅ Thank you! Your vouch has been posted. The ticket will now be closed.' });
+          
+          // Close the ticket automatically after confirming
           const ticketChannel = await client.channels.fetch(ticketChannelId).catch(() => null);
-          if (ticketChannel) await ticketChannel.delete('Ticket fully confirmed and vouched.').catch(() => {});
+          if (ticketChannel) {
+            await closeTicket(ticketChannel, client.user.id);
+          }
 
         } catch (e) {
           console.error(e);
