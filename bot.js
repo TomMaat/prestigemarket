@@ -111,14 +111,13 @@ async function readGist() {
     tickets: {}, notlegitTickets: {}, confirmedRejects: [], vouchCounter: 0,
     storeData: { sections: {}, services: {}, products: {}, lastSection: null, lastService: null, lastProduct: null, serviceChannels: {}, serviceMessages: {} },
     storePanelMessageId: null, earnings: { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 },
-    earningsMessageId: null, paymentMethodsMessageId: null, giveaways: {}, giveawayEntries: {},
+    earningsMessageId: null, paymentMethodsMessageId: null, giveaways: {},
     customerSpent: {}, customerTickets: {}, customerHistory: {}, customerOverviewMessageId: null,
     userInvites: {}, userRewards: {}, inviteRewardsMessageId: null, inviteOverviewMessageId: null,
     ticketStats: { total: 0, closed: 0 }, ticketStatsMessageId: null,
   };
   if (!data.files || !data.files['data.json']) return defaults;
-  const parsed = JSON.parse(data.files['data.json'].content);
-  return { ...defaults, ...parsed };
+  return { ...defaults, ...JSON.parse(data.files['data.json'].content) };
 }
 
 async function writeGist(data) {
@@ -224,13 +223,12 @@ function parseDuration(str) {
 
 // ===== Ticket Stats =====
 function buildTicketStatsEmbed(stats, openCount) {
-  const totalAll = openCount + stats.closed;
   return new EmbedBuilder()
     .setTitle('📊 Ticket Statistics').setColor(0x5865f2).setThumbnail(LOGO)
     .addFields(
       { name: '🟢 Open Tickets', value: `**${openCount}**`, inline: true },
       { name: '🔒 Closed Tickets', value: `**${stats.closed}**`, inline: true },
-      { name: '📁 Total Tickets', value: `**${totalAll}**`, inline: true }
+      { name: '📁 Total Tickets', value: `**${openCount + stats.closed}**`, inline: true }
     )
     .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
 }
@@ -238,8 +236,7 @@ async function updateTicketStats() {
   try {
     const ch = await client.channels.fetch(TICKET_STATS_CHANNEL_ID).catch(() => null);
     if (!ch) return;
-    const tickets = await getTickets();
-    const openCount = Object.keys(tickets).length;
+    const openCount = Object.keys(await getTickets()).length;
     const stats = await getTicketStats();
     const embed = buildTicketStatsEmbed(stats, openCount);
     const messageId = await getTicketStatsMessageId();
@@ -265,8 +262,7 @@ async function updateCustomerOverview() {
     const ch = await client.channels.fetch(CUSTOMER_OVERVIEW_CHANNEL_ID).catch(() => null);
     if (!ch) return;
     const messageId = await getCustomerOverviewMessageId();
-    const spent = await getCustomerSpent();
-    const embed = buildCustomerOverviewEmbed(spent);
+    const embed = buildCustomerOverviewEmbed(await getCustomerSpent());
     if (messageId) {
       const msg = await ch.messages.fetch(messageId).catch(() => null);
       if (msg) { await msg.edit({ embeds: [embed] }); return; }
@@ -294,7 +290,7 @@ function buildInviteRewardsButtons() {
 async function setupInviteRewards() {
   try {
     const ch = await client.channels.fetch(INVITE_REWARDS_CHANNEL_ID).catch(() => null);
-    if (!ch) return console.error(`❌ Invite rewards channel not found.`);
+    if (!ch) return console.error('❌ Invite rewards channel not found.');
     const fetched = await ch.messages.fetch({ limit: 50 });
     for (const m of fetched.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
     const newMsg = await ch.send({ embeds: [buildInviteRewardsEmbed()], components: [buildInviteRewardsButtons()] });
@@ -319,8 +315,7 @@ async function updateInviteOverview() {
     const ch = await client.channels.fetch(INVITE_OVERVIEW_CHANNEL_ID).catch(() => null);
     if (!ch) return;
     const messageId = await getInviteOverviewMessageId();
-    const invites = await getUserInvites();
-    const embed = buildInviteOverviewEmbed(invites);
+    const embed = buildInviteOverviewEmbed(await getUserInvites());
     if (messageId) {
       const msg = await ch.messages.fetch(messageId).catch(() => null);
       if (msg) { await msg.edit({ embeds: [embed] }); return; }
@@ -365,7 +360,7 @@ function buildLegitRow(votes) {
 async function setupLegit() {
   try {
     const ch = await client.channels.fetch(LEGIT_CHANNEL_ID).catch(() => null);
-    if (!ch || !ch.isTextBased()) return console.error(`❌ Legit channel not found.`);
+    if (!ch || !ch.isTextBased()) return console.error('❌ Legit channel not found.');
     const votes = await getLegitVotes();
     const confirmed = await getConfirmedRejects();
     const embed = buildLegitEmbed(votes, confirmed);
@@ -409,7 +404,7 @@ async function updateVerifyMessage() {
 async function setupVerify() {
   try {
     const ch = await client.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
-    if (!ch) return console.error(`❌ Verify channel not found.`);
+    if (!ch) return console.error('❌ Verify channel not found.');
     const fetched = await ch.messages.fetch({ limit: 50 });
     for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
     const guild = ch.guild;
@@ -445,8 +440,7 @@ async function updateEarningsPanel() {
     const ch = await client.channels.fetch(EARNINGS_PANEL_CHANNEL_ID).catch(() => null);
     if (!ch) return;
     const messageId = await getEarningsMessageId();
-    const earnings = await getEarnings();
-    const embed = buildEarningsEmbed(earnings);
+    const embed = buildEarningsEmbed(await getEarnings());
     if (messageId) {
       const msg = await ch.messages.fetch(messageId).catch(() => null);
       if (msg) { await msg.edit({ embeds: [embed] }); return; }
@@ -460,7 +454,7 @@ async function updateEarningsPanel() {
 async function setupPaymentMethods() {
   try {
     const ch = await client.channels.fetch(PAYMENT_METHODS_CHANNEL_ID).catch(() => null);
-    if (!ch) return console.error(`❌ Payment methods channel not found.`);
+    if (!ch) return console.error('❌ Payment methods channel not found.');
     const embed = new EmbedBuilder()
       .setTitle('Payment Methods')
       .setDescription(
@@ -564,11 +558,10 @@ function buildStoreRows() {
 async function setupStorePanel() {
   try {
     const ch = await client.channels.fetch(STORE_PANEL_CHANNEL_ID).catch(() => null);
-    if (!ch) return console.error(`❌ Store panel channel not found.`);
+    if (!ch) return console.error('❌ Store panel channel not found.');
     const fetched = await ch.messages.fetch({ limit: 50 });
     for (const msg of fetched.filter(m => m.author.id === client.user.id).values()) await msg.delete().catch(() => {});
-    const store = await getStoreData();
-    const newMsg = await ch.send({ embeds: [buildStoreEmbed(store)], components: buildStoreRows() });
+    const newMsg = await ch.send({ embeds: [buildStoreEmbed(await getStoreData())], components: buildStoreRows() });
     await setStorePanelMessageId(newMsg.id);
     console.log('✅ Store panel placed');
   } catch (e) { console.error('Store error:', e.message); }
@@ -581,8 +574,7 @@ async function updateStorePanel() {
     if (!messageId) return;
     const msg = await ch.messages.fetch(messageId).catch(() => null);
     if (!msg) return;
-    const store = await getStoreData();
-    await msg.edit({ embeds: [buildStoreEmbed(store)], components: buildStoreRows() });
+    await msg.edit({ embeds: [buildStoreEmbed(await getStoreData())], components: buildStoreRows() });
   } catch (e) { console.error('Store update error:', e.message); }
 }
 async function updateServiceShop(serviceName) {
@@ -724,9 +716,9 @@ const commands = [
   { name: 'refreshverify', description: 'Refresh the verify message' },
   { name: 'setupstore', description: 'Place the store management panel' },
   { name: 'removekruis', description: 'Remove ❌ votes from the legit poll', options: [{ name: 'amount', description: 'How many?', type: 4, required: true, min_value: 1 }] },
-  { name: 'restock', description: 'Send a restock notification', options: [
-      { name: 'product', description: 'Product name', type: 3, required: true },
-      { name: 'service', description: 'Service name', type: 3, required: true },
+  { name: 'restock', description: 'Send a restock notification (product OR service)', options: [
+      { name: 'product', description: 'Product name', type: 3, required: false },
+      { name: 'service', description: 'Service name', type: 3, required: false },
       { name: 'extra', description: 'Extra information', type: 3, required: false } ] },
 ];
 
@@ -792,9 +784,8 @@ client.on('interactionCreate', async (i) => {
       if (!i.member.roles.cache.has(EDIT_CUSTOMER_ROLE_ID)) return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       const targetUser = i.options.getUser('user');
-      const spentRaw = i.options.getString('spent');
-      const spentAmount = parseFloat(spentRaw.replace(',', '.').replace('€', '').trim());
-      if (isNaN(spentAmount) || spentAmount < 0) return i.editReply({ content: '❌ Invalid amount. Use a number like `0,75` or `5.50`.' });
+      const spentAmount = parseFloat(i.options.getString('spent').replace(',', '.').replace('€', '').trim());
+      if (isNaN(spentAmount) || spentAmount < 0) return i.editReply({ content: '❌ Invalid amount. Use `0,75` or `5.50`.' });
       const spent = await getCustomerSpent();
       const oldAmount = spent[targetUser.id] || 0;
       spent[targetUser.id] = spentAmount;
@@ -864,10 +855,9 @@ client.on('interactionCreate', async (i) => {
     if (name === 'resetearned') {
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       const oldEarnings = await getEarnings();
-      const earnings = { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 };
       const fields = [{ name: 'Old Earnings', value:
         `<@${EARNER_1_ID}>: €${(oldEarnings[EARNER_1_ID] || 0).toFixed(2)}\n<@${EARNER_2_ID}>: €${(oldEarnings[EARNER_2_ID] || 0).toFixed(2)}\n<@${EARNER_3_ID}>: €${(oldEarnings[EARNER_3_ID] || 0).toFixed(2)}\n<@${EARNER_4_ID}>: €${(oldEarnings[EARNER_4_ID] || 0).toFixed(2)}` }];
-      await saveEarnings(earnings);
+      await saveEarnings({ [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 });
       await updateEarningsPanel();
       await sendLog('🔄 Earnings Reset', `All earnings reset to **€0.00** by <@${i.user.id}>.`, 0xffaa00, fields);
       return i.editReply({ content: '✅ Earnings reset to 0 for all users.' });
@@ -933,15 +923,21 @@ client.on('interactionCreate', async (i) => {
       const product = i.options.getString('product');
       const service = i.options.getString('service');
       const extra = i.options.getString('extra');
+      if (!product && !service) return i.editReply({ content: '❌ Provide either a `product` or a `service`.' });
+      if (product && service) return i.editReply({ content: '❌ Provide only **one** of `product` or `service`, not both.' });
       const ch = await client.channels.fetch(RESTOCK_CHANNEL_ID).catch(() => null);
       if (!ch) return i.editReply({ content: '❌ Restock channel not found.' });
-      const embed = new EmbedBuilder()
-        .setTitle('📦 Restock Alert!').setColor(0x00ff88).setThumbnail(LOGO)
-        .setDescription(`**${service}** has been restocked!\n\n**Product:** ${product}\n` + (extra ? `**Extra:** ${extra}\n\n` : '\n') + `Get it now before it's gone! 🛒`)
-        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+      const embed = new EmbedBuilder().setTitle('📦 Restock Alert!').setColor(0x00ff88).setThumbnail(LOGO).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+      if (product) {
+        embed.setDescription(`A product has been restocked!\n\n**Product:** ${product}\n` + (extra ? `**Extra:** ${extra}\n\n` : '\n') + `Get it now before it's gone! 🛒`);
+      } else {
+        const store = await getStoreData();
+        const channelId = store.serviceChannels?.[service];
+        embed.setDescription(`A service has been restocked!\n\n**Service:** ${service}\n**Channel:** ${channelId ? `<#${channelId}>` : '*No channel linked*'}\n` + (extra ? `**Extra:** ${extra}\n\n` : '\n') + `Check it out now! 🛒`);
+      }
       await ch.send({ content: `<@&${VERIFIED_ROLE_ID}>`, embeds: [embed] });
-      await sendLog('📦 Restock', `<@${i.user.id}> restocked **${product}** (${service}).${extra ? ` Extra: ${extra}` : ''}`, 0x00ff88);
-      return i.editReply({ content: `✅ Restock sent for **${product}**!` });
+      await sendLog('📦 Restock', `<@${i.user.id}> restocked ${product ? `**${product}**` : `service **${service}**`}.${extra ? ` Extra: ${extra}` : ''}`, 0x00ff88);
+      return i.editReply({ content: '✅ Restock notification sent!' });
     }
 
     const ticket = (await getTickets())[i.channelId];
@@ -1013,10 +1009,7 @@ client.on('interactionCreate', async (i) => {
         const prodData = store.products[ticket.product];
         let profit = 0;
         const totalPrice = parsePrice(ticket.total);
-        if (prodData) {
-          const buyCostPer = prodData.buyCost ? parsePrice(prodData.buyCost) : 0;
-          profit = totalPrice - (buyCostPer * (ticket.quantity || 1));
-        }
+        if (prodData) profit = totalPrice - ((prodData.buyCost ? parsePrice(prodData.buyCost) : 0) * (ticket.quantity || 1));
         if (profit !== 0 && PAYMENT_COMMAND_ALLOWED_IDS.includes(i.user.id)) {
           const earnings = await getEarnings();
           earnings[i.user.id] = (earnings[i.user.id] || 0) + profit;
@@ -1053,7 +1046,7 @@ client.on('interactionCreate', async (i) => {
         const targetUser = await client.users.fetch(ticket.userId).catch(() => null);
         if (targetUser) {
           const dmEmbed = new EmbedBuilder().setTitle('Thank you for your purchase!').setColor(0x00ff88)
-            .setDescription(`Thank you for your purchase at **Prestige Market**! We hope you are satisfied with your order.\n\nPlease consider leaving a vouch in <#${VOUCH_CHANNEL_ID}> to support us.`)
+            .setDescription(`Thank you for your purchase at **Prestige Market**!\n\nPlease consider leaving a vouch in <#${VOUCH_CHANNEL_ID}> to support us.`)
             .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
           const vouchButton = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setLabel('Leave a Vouch').setStyle(ButtonStyle.Link).setURL(`https://discord.com/channels/${GUILD_ID}/${VOUCH_CHANNEL_ID}`)
@@ -1432,8 +1425,7 @@ client.on('interactionCreate', async (i) => {
     if (cid === 'store_remove_section') {
       const section = i.values[0];
       const store = await getStoreData();
-      const services = store.sections[section] || [];
-      for (const service of services) {
+      for (const service of store.sections[section] || []) {
         const stillUsed = Object.entries(store.sections).some(([s, list]) => s !== section && list.includes(service));
         if (!stillUsed) {
           for (const prod of store.services[service] || []) {
