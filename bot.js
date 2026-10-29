@@ -882,11 +882,18 @@ client.on('interactionCreate', async (i) => {
         if (!purchases.length) return safeReply('❌ You have no purchases yet. You can only vouch after buying something.');
 
         const last = purchases[purchases.length - 1];
-        console.log(`[VOUCH] last purchase:`, JSON.stringify(last));
-
         const extra = i.options.getString('extra') || 'Great service!';
         const productLabel = buildVouchProductLabel(last);
-        const sellerId = last.sellerId || null;
+        
+        // Force fetch user so tags render for everyone
+        const customerUser = await client.users.fetch(i.user.id).catch(() => i.user);
+        const customerTag = `<@${customerUser.id}>`;
+
+        let sellerTag = '*Unknown*';
+        if (last.sellerId) {
+          const sellerUser = await client.users.fetch(last.sellerId).catch(() => null);
+          sellerTag = sellerUser ? `<@${sellerUser.id}>` : `*Unknown*`;
+        }
 
         const ch = await client.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
         if (!ch) return safeReply('❌ Vouch channel not found. Please contact staff.');
@@ -903,8 +910,8 @@ client.on('interactionCreate', async (i) => {
           .setAuthor({ name: i.user.displayName, iconURL: i.user.displayAvatarURL() })
           .addFields(
             { name: 'Product', value: productLabel, inline: true },
-            { name: 'Customer', value: `<@${i.user.id}>`, inline: true },
-            { name: 'Seller', value: sellerId ? `<@${sellerId}>` : '*Unknown*', inline: true },
+            { name: 'Customer', value: customerTag, inline: true },
+            { name: 'Seller', value: sellerTag, inline: true },
             { name: 'Extra', value: extra, inline: false }
           ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
 
@@ -915,7 +922,7 @@ client.on('interactionCreate', async (i) => {
           return safeReply(`❌ Could not post the vouch. Please contact staff.`);
         }
 
-        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**${sellerId ? ` (seller: <@${sellerId}>)` : ''}.`, 0x00ff88);
+        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**${last.sellerId ? ` (seller: <@${last.sellerId}>)` : ''}.`, 0x00ff88);
         try { await i.user.send({ content: `✅ Your vouch for **${productLabel}** has been posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (_) {}
 
         console.log(`[VOUCH] success - vouch #${nummer}`);
