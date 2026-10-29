@@ -42,6 +42,7 @@ const RECENT_PAYMENTS_CHANNEL_ID = '1564761373026681205';
 const EARNINGS_PANEL_CHANNEL_ID = '1564761453402263572';
 const PAYMENT_METHODS_CHANNEL_ID = '1564552449585586186';
 const GIVEAWAY_CHANNEL_ID = '1564415334658744443';
+const CUSTOMER_OVERVIEW_CHANNEL_ID = '1565133390431395840';
 
 // Earnings Users
 const EARNER_1_ID = '710623438657683486';
@@ -61,6 +62,16 @@ const STAFF_ROLE_IDS = [
   MAIN_TAG_ROLE_ID
 ];
 const CLEAR_PRODUCTS_ROLE_ID = '1564415129955729418';
+
+// Spent Roles
+const SPENT_ROLES = [
+  { amount: 5, roleId: '1565355736085692516' },
+  { amount: 10, roleId: '1565355972128546816' },
+  { amount: 25, roleId: '1565356058766090311' },
+  { amount: 50, roleId: '1565356139535671306' },
+  { amount: 100, roleId: '1565356226512945172' },
+  { amount: 250, roleId: '1565356326136188988' },
+];
 
 // Categories
 const NOT_LEGIT_TICKET_CATEGORY_ID = '1564632244235014315';
@@ -160,6 +171,10 @@ async function readGist() {
       paymentMethodsMessageId: null,
       giveaways: {},
       giveawayEntries: {},
+      customerSpent: {},
+      customerTickets: {},
+      customerHistory: {},
+      customerOverviewMessageId: null,
     };
   }
 
@@ -179,6 +194,10 @@ async function readGist() {
     paymentMethodsMessageId: parsed.paymentMethodsMessageId || null,
     giveaways: parsed.giveaways || {},
     giveawayEntries: parsed.giveawayEntries || {},
+    customerSpent: parsed.customerSpent || {},
+    customerTickets: parsed.customerTickets || {},
+    customerHistory: parsed.customerHistory || {},
+    customerOverviewMessageId: parsed.customerOverviewMessageId || null,
   };
 }
 
@@ -258,6 +277,15 @@ async function saveGiveaways(g) { const d = await readGist(); d.giveaways = g; a
 async function getGiveawayEntries() { const d = await readGist(); return d.giveawayEntries || {}; }
 async function saveGiveawayEntries(e) { const d = await readGist(); d.giveawayEntries = e; await writeGist(d); }
 
+async function getCustomerSpent() { const d = await readGist(); return d.customerSpent || {}; }
+async function saveCustomerSpent(s) { const d = await readGist(); d.customerSpent = s; await writeGist(d); }
+async function getCustomerTickets() { const d = await readGist(); return d.customerTickets || {}; }
+async function saveCustomerTickets(t) { const d = await readGist(); d.customerTickets = t; await writeGist(d); }
+async function getCustomerHistory() { const d = await readGist(); return d.customerHistory || {}; }
+async function saveCustomerHistory(h) { const d = await readGist(); d.customerHistory = h; await writeGist(d); }
+async function getCustomerOverviewMessageId() { const d = await readGist(); return d.customerOverviewMessageId; }
+async function setCustomerOverviewMessageId(id) { const d = await readGist(); d.customerOverviewMessageId = id; await writeGist(d); }
+
 // ===== HELPERS =====
 function isStaff(member) {
   return member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
@@ -306,6 +334,54 @@ function parseDuration(str) {
   const unit = match[2].toLowerCase();
   const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
   return amount * multipliers[unit];
+}
+
+// ===== CUSTOMER OVERVIEW =====
+function buildCustomerOverviewEmbed(spent) {
+  const entries = Object.entries(spent).filter(([_, amount]) => amount > 0).sort((a, b) => b[1] - a[1]);
+  
+  const embed = new EmbedBuilder()
+    .setTitle('👥 Customer Overview')
+    .setColor(0x00ff88)
+    .setThumbnail(LOGO)
+    .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+    .setTimestamp();
+
+  if (entries.length === 0) {
+    embed.setDescription('*No customers yet.*');
+    return embed;
+  }
+
+  let desc = '';
+  for (const [userId, amount] of entries.slice(0, 50)) {
+    desc += `<@${userId}>: **€${amount.toFixed(2)}**\n`;
+  }
+
+  embed.setDescription(desc);
+  return embed;
+}
+
+async function updateCustomerOverview() {
+  try {
+    const channel = await client.channels.fetch(CUSTOMER_OVERVIEW_CHANNEL_ID).catch(() => null);
+    if (!channel) return;
+
+    const messageId = await getCustomerOverviewMessageId();
+    const spent = await getCustomerSpent();
+    const embed = buildCustomerOverviewEmbed(spent);
+
+    if (messageId) {
+      const msg = await channel.messages.fetch(messageId).catch(() => null);
+      if (msg) {
+        await msg.edit({ embeds: [embed] });
+        return;
+      }
+    }
+
+    const newMsg = await channel.send({ embeds: [embed] });
+    await setCustomerOverviewMessageId(newMsg.id);
+    console.log('✅ Customer Overview placed');
+  } catch (e) { console.error('Failed to update customer overview:', e.message); }
 }
 
 // ===== STATUS SYSTEM =====
@@ -643,8 +719,7 @@ async function runGiveaway(channel, winners, product, durationMs, blacklistRoles
   } catch (e) { console.error('Giveaway error:', e.message); }
 }
 
-// ===== STORE MANAGEMENT SYSTEM =====
-function buildStoreEmbed(store) {
+// ===== STORE MANAGEMENT SYSTEM =====function buildStoreEmbed(store) {
   const embed = new EmbedBuilder()
     .setTitle('🛒 Store Management')
     .setColor(0x5865f2)
@@ -900,6 +975,9 @@ const commands = [
   { name: 'giveproduct', description: 'Give the product to the customer (single price only)', options: [
       { name: 'logins', description: 'The account login(s), separated by spaces', type: 3, required: true }
   ] },
+  { name: 'search', description: 'Search a user their stats', options: [
+      { name: 'user', description: 'User', type: 6, required: true }
+  ] },
   { name: 'resetearned', description: 'Reset all earnings to 0' },
   { name: 'clearallproducts', description: 'Clear all products and store data' },
   { name: 'giveaway', description: 'Start a giveaway', options: [
@@ -943,6 +1021,37 @@ client.on('interactionCreate', async (i) => {
       if (!isStaff(i.member)) {
         return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
       }
+    }
+
+    if (name === 'search') {
+      if (!isStaff(i.member)) {
+        return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+      }
+
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      const targetUser = i.options.getUser('user');
+      const spent = await getCustomerSpent();
+      const tickets = await getCustomerTickets();
+      const history = await getCustomerHistory();
+
+      const totalSpent = spent[targetUser.id] || 0;
+      const ticketCount = tickets[targetUser.id] || 0;
+      const purchases = history[targetUser.id] || [];
+
+      const embed = new EmbedBuilder()
+        .setTitle(`🔍 Customer Stats for ${targetUser.tag}`)
+        .setColor(0x00ff88)
+        .setThumbnail(targetUser.displayAvatarURL())
+        .setDescription(
+          `**Total Tickets:** ${ticketCount}\n` +
+          `**Total Spent:** €${totalSpent.toFixed(2)}\n\n` +
+          `**Purchases:**\n` +
+          (purchases.length > 0 ? purchases.map(p => `> ${p.product} (${p.quantity}x) - ${p.total}`).join('\n') : '*No purchases yet.*')
+        )
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      return i.editReply({ embeds: [embed] });
     }
 
     if (name === 'clearallproducts') {
@@ -1177,9 +1286,9 @@ client.on('interactionCreate', async (i) => {
         const store = await getStoreData();
         const prodData = store.products[ticket.product];
         let profit = 0;
+        const totalPrice = parsePrice(ticket.total);
 
-        if (prodData && ticket.total) {
-          const totalPrice = parsePrice(ticket.total);
+        if (prodData) {
           const buyCostPer = prodData.buyCost ? parsePrice(prodData.buyCost) : 0;
           const quantity = ticket.quantity || 1;
           profit = totalPrice - (buyCostPer * quantity);
@@ -1191,6 +1300,38 @@ client.on('interactionCreate', async (i) => {
             earnings[i.user.id] = (earnings[i.user.id] || 0) + profit;
             await saveEarnings(earnings);
             await updateEarningsPanel();
+          }
+        }
+
+        // Update customer spent
+        const spent = await getCustomerSpent();
+        spent[ticket.userId] = (spent[ticket.userId] || 0) + totalPrice;
+        await saveCustomerSpent(spent);
+        await updateCustomerOverview();
+
+        // Update customer tickets & history
+        const customerTickets = await getCustomerTickets();
+        customerTickets[ticket.userId] = (customerTickets[ticket.userId] || 0) + 1;
+        await saveCustomerTickets(customerTickets);
+
+        const history = await getCustomerHistory();
+        if (!history[ticket.userId]) history[ticket.userId] = [];
+        history[ticket.userId].push({ product: ticket.product, quantity: ticket.quantity, total: ticket.total });
+        await saveCustomerHistory(history);
+
+        // Assign vouch role
+        const member = await i.guild.members.fetch(ticket.userId).catch(() => null);
+        if (member && !member.roles.cache.has(VOUCH_ROLE_ID)) {
+          await member.roles.add(VOUCH_ROLE_ID).catch(() => console.log('Could not add vouch role'));
+        }
+
+        // Assign spent roles
+        if (member) {
+          const newTotal = spent[ticket.userId];
+          for (const role of SPENT_ROLES) {
+            if (newTotal >= role.amount && !member.roles.cache.has(role.roleId)) {
+              await member.roles.add(role.roleId).catch(() => console.log(`Could not add spent role ${role.roleId}`));
+            }
           }
         }
 
@@ -1318,7 +1459,6 @@ client.on('interactionCreate', async (i) => {
       await saveStoreData(store);
       await updateStorePanel();
       
-      // Direct vraag voor kanaal
       const channels = i.guild.channels.cache.filter(c => c.type === ChannelType.GuildText && c.id !== STORE_PANEL_CHANNEL_ID);
       if (channels.size === 0) {
         return i.reply({ content: `✅ Service **${name}** added to **${section}**. (No text channels found to link.)`, flags: MessageFlags.Ephemeral });
@@ -1343,7 +1483,6 @@ client.on('interactionCreate', async (i) => {
       await saveStoreData(store);
       await updateStorePanel();
       
-      // Update kanaal embed als er een kanaal is
       if (store.serviceChannels?.[service]) {
         await updateServiceShop(service);
       }
@@ -1416,7 +1555,6 @@ client.on('interactionCreate', async (i) => {
       return i.update({ content: `You want **${quantity}** of **${product}**. Total: **${formattedTotal}**.\n\nSelect your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
 
-    // === TICKET MODALS (Support, Bug, Partner) ===
     if (i.customId.startsWith('modal_create_ticket_')) {
       const category = i.customId.replace('modal_create_ticket_', '');
       const cat = TICKET_CATEGORIES[category];
@@ -1448,6 +1586,10 @@ client.on('interactionCreate', async (i) => {
         });
 
         await addTicket(ticketChannel.id, i.user.id, category);
+
+        const customerTickets = await getCustomerTickets();
+        customerTickets[i.user.id] = (customerTickets[i.user.id] || 0) + 1;
+        await saveCustomerTickets(customerTickets);
 
         const embed = new EmbedBuilder()
           .setTitle(cat.name)
@@ -1649,6 +1791,10 @@ client.on('interactionCreate', async (i) => {
         });
 
         await addTicket(ticketChannel.id, userId, choice);
+
+        const customerTickets = await getCustomerTickets();
+        customerTickets[userId] = (customerTickets[userId] || 0) + 1;
+        await saveCustomerTickets(customerTickets);
 
         const embed = new EmbedBuilder().setTitle(cat.name).setColor(cat.color).setDescription(`<@${userId}> — Please describe your question below.`).setTimestamp();
         const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
@@ -1934,6 +2080,10 @@ client.on('interactionCreate', async (i) => {
           payment: data.payment
         });
 
+        const customerTickets = await getCustomerTickets();
+        customerTickets[userId] = (customerTickets[userId] || 0) + 1;
+        await saveCustomerTickets(customerTickets);
+
         const embed = new EmbedBuilder()
           .setTitle('🛒 Purchase Details')
           .setColor(0x00ff88)
@@ -2050,7 +2200,6 @@ client.on('interactionCreate', async (i) => {
       
       await i.showModal(modal);
       
-      // Na de modal sturen we een kanaal dropdown voor het koppelen
       const channels = i.guild.channels.cache.filter(c => c.type === ChannelType.GuildText && c.id !== STORE_PANEL_CHANNEL_ID);
       if (channels.size > 0) {
         const menu = new StringSelectMenuBuilder()
@@ -2326,6 +2475,19 @@ client.on('guildMemberAdd', async (member) => {
 client.on('guildMemberRemove', async (member) => {
   if (member.guild.id !== GUILD_ID) return;
   await updateVerifyMessage();
+
+  // Auto-close tickets for leaving member
+  try {
+    const tickets = await getTickets();
+    const userTickets = Object.entries(tickets).filter(([_, t]) => t.userId === member.id);
+    for (const [channelId, ticket] of userTickets) {
+      const channel = await client.channels.fetch(channelId).catch(() => null);
+      if (channel) {
+        await channel.send({ content: `⚠️ Customer <@${member.id}> has left the server. Ticket will be closed automatically.` });
+        await closeTicket(channel, client.user.id);
+      }
+    }
+  } catch (e) { console.error('Auto-close error:', e.message); }
 });
 
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
@@ -2356,6 +2518,9 @@ client.once('ready', async () => {
 
   await new Promise(resolve => setTimeout(resolve, 3000));
   await updateEarningsPanel();
+
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  await updateCustomerOverview();
 
   // Zorg dat het kanaal voor Streaming gekoppeld is en de embed plaatst
   const store = await getStoreData();
