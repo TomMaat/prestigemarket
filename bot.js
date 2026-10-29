@@ -220,6 +220,14 @@ function parseDuration(str) {
   const mult = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
   return parseInt(match[1]) * mult[match[2].toLowerCase()];
 }
+function buildVouchProductLabel(entry) {
+  if (!entry) return 'Unknown';
+  const qty = entry.quantity || 1;
+  const unit = entry.unit;
+  if (qty && qty > 1 && !unit) return `${qty}x ${entry.product}`;
+  if (qty && qty > 1 && unit) return `${qty} ${entry.product}`;
+  return entry.product;
+}
 
 // ===== Ticket Stats =====
 function buildTicketStatsEmbed(stats, openCount) {
@@ -790,7 +798,7 @@ client.on('interactionCreate', async (i) => {
       const embed = new EmbedBuilder()
         .setTitle(`🔍 Customer Stats for ${targetUser.tag}`).setColor(0x00ff88).setThumbnail(targetUser.displayAvatarURL())
         .setDescription(`**Total Tickets:** ${ticketCount}\n**Total Spent:** €${totalSpent.toFixed(2)}\n\n**Purchases:**\n` +
-          (purchases.length ? purchases.map(p => `> ${p.product} (${p.quantity}x) - ${p.total}`).join('\n') : '*No purchases yet.*'))
+          (purchases.length ? purchases.map(p => `> ${buildVouchProductLabel(p)} - ${p.total}`).join('\n') : '*No purchases yet.*'))
         .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
       return i.editReply({ embeds: [embed] });
     }
@@ -907,8 +915,8 @@ client.on('interactionCreate', async (i) => {
       if (!purchases.length) return i.editReply({ content: '❌ You have no purchases yet. You can only vouch after buying something.' });
 
       const last = purchases[purchases.length - 1];
-      const product = last.product;
       const extra = i.options.getString('extra') || 'Great service!';
+      const productLabel = buildVouchProductLabel(last);
 
       try {
         const ch = await client.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
@@ -920,15 +928,15 @@ client.on('interactionCreate', async (i) => {
           .setTitle(`Vouch #${nummer}`).setColor(0x00ff88).setThumbnail(LOGO)
           .setAuthor({ name: i.user.displayName, iconURL: i.user.displayAvatarURL() })
           .addFields(
-            { name: 'Product', value: product, inline: true },
+            { name: 'Product', value: productLabel, inline: true },
             { name: 'Customer', value: `<@${i.user.id}>`, inline: true },
             { name: 'Extra', value: extra, inline: false }
           ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
 
         await ch.send({ embeds: [embed] });
-        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${product}**.`, 0x00ff88);
-        try { await i.user.send({ content: `✅ Your vouch for **${product}** has been posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (err) {}
-        return i.editReply({ content: `✅ Vouch posted for **${product}**!` });
+        await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**.`, 0x00ff88);
+        try { await i.user.send({ content: `✅ Your vouch for **${productLabel}** has been posted in <#${VOUCH_CHANNEL_ID}>!` }); } catch (err) {}
+        return i.editReply({ content: `✅ Vouch posted for **${productLabel}**!` });
       } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
     }
 
@@ -1069,7 +1077,13 @@ client.on('interactionCreate', async (i) => {
         await saveCustomerTickets(customerTickets);
         const history = await getCustomerHistory();
         if (!history[ticket.userId]) history[ticket.userId] = [];
-        history[ticket.userId].push({ product: ticket.product, quantity: ticket.quantity, total: ticket.total });
+        const prodInfo = store.products[ticket.product] || {};
+        history[ticket.userId].push({
+          product: ticket.product,
+          quantity: ticket.quantity,
+          total: ticket.total,
+          unit: prodInfo.amount || null
+        });
         await saveCustomerHistory(history);
         const member = await i.guild.members.fetch(ticket.userId).catch(() => null);
         if (member) {
