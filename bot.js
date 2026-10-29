@@ -1140,8 +1140,12 @@ client.on('interactionCreate', async (i) => {
             await recentChannel.send({ embeds: [paymentEmbed] });
           }
           
-          // We sluiten de ticket NIET meer automatisch. We sturen de confirmatie-vraag.
-          
+          // Verplaats naar archief (zoals de oude functionaliteit)
+          await i.channel.setParent(ARCHIVE_CATEGORY_ID, { lockPermissions: false });
+          const t = await getTickets();
+          if (t[i.channelId]) { t[i.channelId].categorie = 'archived'; await saveTickets(t); }
+
+          // Stuur de bevestigingsvraag in de ticket
           const confirmEmbed = new EmbedBuilder()
             .setTitle('Did you receive your delivery?')
             .setColor(0x00ff88)
@@ -1154,6 +1158,7 @@ client.on('interactionCreate', async (i) => {
 
           await i.channel.send({ embeds: [confirmEmbed], components: [confirmRow] });
 
+          // Stuur de DM met de instructie
           const targetUser = await client.users.fetch(ticket.userId).catch(() => null);
           if (targetUser) {
             const dmEmbed = new EmbedBuilder().setTitle('Thank you for your purchase!').setColor(0x00ff88)
@@ -1166,7 +1171,7 @@ client.on('interactionCreate', async (i) => {
           }
 
           await sendLog('📦 Order Delivered', `Order for <@${ticket.userId}> in <#${i.channelId}> marked as delivered by <@${i.user.id}>.`, 0x00ff88);
-          return i.editReply({ content: '✅ Delivery logged and user notified. Waiting for customer to confirm.' });
+          return i.editReply({ content: '✅ Delivery logged, ticket moved to archive, and user notified.' });
         } catch (e) { return i.editReply({ content: `❌ Error: ${e.message}` }); }
       }
 
@@ -1846,12 +1851,15 @@ client.on('interactionCreate', async (i) => {
           await ch.send({ embeds: [embed] });
           await sendLog('⭐ New Vouch', `<@${i.user.id}> left a vouch (#${nummer}) for **${productLabel}**${last.sellerId ? ` (seller: <@${last.sellerId}>)` : ''}.`, 0x00ff88);
 
-          await i.editReply({ content: '✅ Thank you! Your vouch has been posted. The ticket will now be closed.' });
+          await i.editReply({ content: '✅ Thank you! Your vouch has been posted. Updating stats...' });
           
-          // Close the ticket automatically after confirming
+          // Update stats: dit ticket is nu officieel "closed"
           const ticketChannel = await client.channels.fetch(ticketChannelId).catch(() => null);
           if (ticketChannel) {
-            await closeTicket(ticketChannel, client.user.id);
+            const stats = await getTicketStats();
+            stats.closed += 1;
+            await saveTicketStats(stats);
+            await updateTicketStats();
           }
 
         } catch (e) {
@@ -2244,6 +2252,38 @@ client.once('ready', async () => {
 
   for (const serviceName of Object.keys(store.serviceChannels || {})) {
     if (store.services[serviceName]) await updateServiceShop(serviceName);
+  }
+
+  // ===== Verify Open Tickets on Startup =====
+  try {
+    const guild = client.guilds.cache.get(GUILD_ID);
+    if (guild) {
+      const tickets = await getTickets();
+      let updatedCount = 0;
+      
+      for (const [channelId, ticket] of Object.entries(tickets)) {
+        const channel = await guild.channels.fetch(channelId).catch(() => null);
+        if (!channel) continue;
+
+        // Check of het kanaal in de archief-categorie staat
+        if (channel.parentId === ARCHIVE_CATEGORY_ID && ticket.categorie !== 'archived') {
+          ticket.categorie = 'archived';
+          updatedCount++;
+        } 
+        // Check of het kanaal NIET in de archief-categorie staat, maar wel als archived gemarkeerd is
+        else if (channel.parentId !== ARCHIVE_CATEGORY_ID && ticket.categorie === 'archived') {
+          ticket.categorie = 'purchase'; // Fallback
+          updatedCount++;
+        }
+      }
+      
+      if (updatedCount > 0) {
+        await saveTickets(tickets);
+        console.log(`[Startup Check] Fixed ${updatedCount} ticket categories.`);
+      }
+    }
+  } catch (e) {
+    console.error('Startup ticket check error:', e.message);
   }
 });
 
