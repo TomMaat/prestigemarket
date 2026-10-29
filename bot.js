@@ -43,6 +43,8 @@ const EARNINGS_PANEL_CHANNEL_ID = '1564761453402263572';
 const PAYMENT_METHODS_CHANNEL_ID = '1564552449585586186';
 const GIVEAWAY_CHANNEL_ID = '1564415334658744443';
 const CUSTOMER_OVERVIEW_CHANNEL_ID = '1565133390431395840';
+const INVITE_REWARDS_CHANNEL_ID = '1564551605095768064';
+const INVITE_OVERVIEW_CHANNEL_ID = '1565359774982348890';
 
 // Earnings Users
 const EARNER_1_ID = '710623438657683486';
@@ -62,6 +64,7 @@ const STAFF_ROLE_IDS = [
   MAIN_TAG_ROLE_ID
 ];
 const CLEAR_PRODUCTS_ROLE_ID = '1564415129955729418';
+const EDIT_CUSTOMER_ROLE_ID = '1565359774982348890'; // Alleen deze rol mag /editcustomer
 
 // Spent Roles
 const SPENT_ROLES = [
@@ -144,7 +147,7 @@ const SELF_URL = process.env.RENDER_EXTERNAL_URL;
 if (SELF_URL) setInterval(() => fetch(SELF_URL).catch(() => {}), 12 * 60 * 1000);
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites],
 });
 
 // ===== GIST DATABASE =====
@@ -175,6 +178,10 @@ async function readGist() {
       customerTickets: {},
       customerHistory: {},
       customerOverviewMessageId: null,
+      userInvites: {},
+      userRewards: {},
+      inviteRewardsMessageId: null,
+      inviteOverviewMessageId: null,
     };
   }
 
@@ -198,6 +205,10 @@ async function readGist() {
     customerTickets: parsed.customerTickets || {},
     customerHistory: parsed.customerHistory || {},
     customerOverviewMessageId: parsed.customerOverviewMessageId || null,
+    userInvites: parsed.userInvites || {},
+    userRewards: parsed.userRewards || {},
+    inviteRewardsMessageId: parsed.inviteRewardsMessageId || null,
+    inviteOverviewMessageId: parsed.inviteOverviewMessageId || null,
   };
 }
 
@@ -285,6 +296,15 @@ async function getCustomerHistory() { const d = await readGist(); return d.custo
 async function saveCustomerHistory(h) { const d = await readGist(); d.customerHistory = h; await writeGist(d); }
 async function getCustomerOverviewMessageId() { const d = await readGist(); return d.customerOverviewMessageId; }
 async function setCustomerOverviewMessageId(id) { const d = await readGist(); d.customerOverviewMessageId = id; await writeGist(d); }
+
+async function getUserInvites() { const d = await readGist(); return d.userInvites || {}; }
+async function saveUserInvites(inv) { const d = await readGist(); d.userInvites = inv; await writeGist(d); }
+async function getUserRewards() { const d = await readGist(); return d.userRewards || {}; }
+async function saveUserRewards(r) { const d = await readGist(); d.userRewards = r; await writeGist(d); }
+async function getInviteRewardsMessageId() { const d = await readGist(); return d.inviteRewardsMessageId; }
+async function setInviteRewardsMessageId(id) { const d = await readGist(); d.inviteRewardsMessageId = id; await writeGist(d); }
+async function getInviteOverviewMessageId() { const d = await readGist(); return d.inviteOverviewMessageId; }
+async function setInviteOverviewMessageId(id) { const d = await readGist(); d.inviteOverviewMessageId = id; await writeGist(d); }
 
 // ===== HELPERS =====
 function isStaff(member) {
@@ -382,6 +402,100 @@ async function updateCustomerOverview() {
     await setCustomerOverviewMessageId(newMsg.id);
     console.log('✅ Customer Overview placed');
   } catch (e) { console.error('Failed to update customer overview:', e.message); }
+}
+
+// ===== INVITE REWARDS SYSTEM =====
+function buildInviteRewardsEmbed() {
+  return new EmbedBuilder()
+    .setTitle('🎁 Invite Rewards')
+    .setColor(0xffaa00)
+    .setThumbnail(LOGO)
+    .setDescription(
+      `Invite your friends to **Prestige Market** and earn exclusive rewards!\n\n` +
+      `**How it works:**\n` +
+      `> Click **Get My Invite Link** to receive your personal link.\n` +
+      `> Share it with your friends.\n` +
+      `> Check your invites via **Check My Invites**.\n\n` +
+      `**Rewards:**\n` +
+      `> 🔥 **5 Invites** → 5% Discount\n` +
+      `> 🔥 **10 Invites** → 10% Discount\n\n` +
+      `**How to claim:**\n` +
+      `> Open a ticket with a staff member and mention your reward.\n\n` +
+      `-# We do not accept fake invites or bots. Invites from users who were previously in the server do not count.`
+    )
+    .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+    .setTimestamp();
+}
+
+function buildInviteRewardsButtons() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('invite_get_link').setLabel('Get My Invite Link').setEmoji('🔗').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('invite_check').setLabel('Check My Invites').setEmoji('📊').setStyle(ButtonStyle.Secondary)
+  );
+}
+
+async function setupInviteRewards() {
+  try {
+    const channel = await client.channels.fetch(INVITE_REWARDS_CHANNEL_ID).catch(() => null);
+    if (!channel) return console.error(`❌ Invite rewards channel (${INVITE_REWARDS_CHANNEL_ID}) not found.`);
+
+    const fetched = await channel.messages.fetch({ limit: 50 });
+    for (const m of fetched.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
+
+    const embed = buildInviteRewardsEmbed();
+    const buttons = buildInviteRewardsButtons();
+
+    const newMsg = await channel.send({ embeds: [embed], components: [buttons] });
+    await setInviteRewardsMessageId(newMsg.id);
+    console.log('✅ Invite rewards placed');
+  } catch (e) { console.error('Invite rewards error:', e.message); }
+}
+
+function buildInviteOverviewEmbed(invites) {
+  const entries = Object.entries(invites).filter(([_, d]) => d.valid > 0).sort((a, b) => b[1].valid - a[1].valid).slice(0, 20);
+  
+  const embed = new EmbedBuilder()
+    .setTitle('🏆 Top Inviters')
+    .setColor(0xffaa00)
+    .setThumbnail(LOGO)
+    .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+    .setTimestamp();
+
+  if (entries.length === 0) {
+    embed.setDescription('*No invites yet.*');
+    return embed;
+  }
+
+  let desc = '';
+  for (const [userId, data] of entries) {
+    desc += `<@${userId}>: **${data.valid}** valid invites (${data.rewarded || 0} rewarded)\n`;
+  }
+
+  embed.setDescription(desc);
+  return embed;
+}
+
+async function updateInviteOverview() {
+  try {
+    const channel = await client.channels.fetch(INVITE_OVERVIEW_CHANNEL_ID).catch(() => null);
+    if (!channel) return;
+
+    const messageId = await getInviteOverviewMessageId();
+    const invites = await getUserInvites();
+    const embed = buildInviteOverviewEmbed(invites);
+
+    if (messageId) {
+      const msg = await channel.messages.fetch(messageId).catch(() => null);
+      if (msg) {
+        await msg.edit({ embeds: [embed] });
+        return;
+      }
+    }
+
+    const newMsg = await channel.send({ embeds: [embed] });
+    await setInviteOverviewMessageId(newMsg.id);
+    console.log('✅ Invite Overview placed');
+  } catch (e) { console.error('Failed to update invite overview:', e.message); }
 }
 
 // ===== STATUS SYSTEM =====
@@ -979,6 +1093,20 @@ const commands = [
   { name: 'search', description: 'Search a user their stats', options: [
       { name: 'user', description: 'User', type: 6, required: true }
   ] },
+  { name: 'checkinvites', description: 'See a user their invites', options: [
+      { name: 'user', description: 'User', type: 6, required: true }
+  ] },
+  { name: 'userewards', description: 'Use rewards for a user', options: [
+      { name: 'user', description: 'User', type: 6, required: true },
+      { name: 'reward', description: 'Reward to claim', type: 3, required: true, choices: [
+          { name: '5%', value: '5' },
+          { name: '10%', value: '10' }
+      ] }
+  ] },
+  { name: 'editcustomer', description: 'Edit the amount a customer spent', options: [
+      { name: 'user', description: 'User', type: 6, required: true },
+      { name: 'amount', description: 'New spent amount', type: 10, required: true, min_value: 0 }
+  ] },
   { name: 'resetearned', description: 'Reset all earnings to 0' },
   { name: 'clearallproducts', description: 'Clear all products and store data' },
   { name: 'giveaway', description: 'Start a giveaway', options: [
@@ -986,6 +1114,9 @@ const commands = [
       { name: 'product', description: 'What is the prize?', type: 3, required: true },
       { name: 'time', description: 'Duration (e.g. 10m, 1h, 1d)', type: 3, required: true },
       { name: 'blacklist_roles', description: 'Roles that cannot win (mention them, separated by spaces)', type: 3, required: false }
+  ] },
+  { name: 'clear', description: 'Clear messages in this channel', options: [
+      { name: 'amount', description: 'Amount of messages (1-100)', type: 4, required: true, min_value: 1, max_value: 100 }
   ] },
   { name: 'add', description: 'Add a user to this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
   { name: 'remove', description: 'Remove a user from this ticket', options: [{ name: 'user', description: 'User', type: 6, required: true }] },
@@ -1018,13 +1149,13 @@ client.on('interactionCreate', async (i) => {
       }
     }
 
-    if (name === 'changepaymentmethod' || name === 'resetearned') {
+    if (name === 'changepaymentmethod' || name === 'resetearned' || name === 'userewards') {
       if (!isStaff(i.member)) {
         return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
       }
     }
 
-    if (name === 'search') {
+    if (name === 'search' || name === 'checkinvites') {
       if (!isStaff(i.member)) {
         return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
       }
@@ -1053,6 +1184,86 @@ client.on('interactionCreate', async (i) => {
         .setTimestamp();
 
       return i.editReply({ embeds: [embed] });
+    }
+
+    if (name === 'checkinvites') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      const targetUser = i.options.getUser('user');
+      const invites = await getUserInvites();
+      const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
+      const invitedList = (userData.invitedUsers || []).map(id => `<@${id}>`).join(', ') || '*Nobody*';
+
+      const embed = new EmbedBuilder()
+        .setTitle(`📊 Invites for ${targetUser.tag}`)
+        .setColor(0xffaa00)
+        .setThumbnail(targetUser.displayAvatarURL())
+        .addFields(
+          { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
+          { name: 'Fake Invites', value: `${userData.fake || 0}`, inline: true },
+          { name: 'Rewarded (used)', value: `${userData.rewarded || 0}`, inline: true },
+          { name: 'Invited Users', value: invitedList, inline: false }
+        )
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      return i.editReply({ embeds: [embed] });
+    }
+
+    if (name === 'editcustomer') {
+      if (!i.member.roles.cache.has(EDIT_CUSTOMER_ROLE_ID)) {
+        return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+      }
+
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      const targetUser = i.options.getUser('user');
+      const amount = i.options.getNumber('amount');
+      const spent = await getCustomerSpent();
+      const oldAmount = spent[targetUser.id] || 0;
+      spent[targetUser.id] = amount;
+      await saveCustomerSpent(spent);
+      await updateCustomerOverview();
+      await sendLog('✏️ Customer Edited', `<@${i.user.id}> changed <@${targetUser.id}>'s spent from **€${oldAmount.toFixed(2)}** to **€${amount.toFixed(2)}**.`, 0xffaa00);
+      return i.editReply({ content: `✅ Updated <@${targetUser.id}> spent from **€${oldAmount.toFixed(2)}** to **€${amount.toFixed(2)}**.` });
+    }
+
+    if (name === 'userewards') {
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      const targetUser = i.options.getUser('user');
+      const reward = i.options.getString('reward');
+      const invites = await getUserInvites();
+      const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
+
+      const requiredInvites = reward === '5' ? 5 : 10;
+      if (userData.valid < requiredInvites) {
+        return i.editReply({ content: `❌ ${targetUser.username} has only **${userData.valid}** valid invites, but needs **${requiredInvites}** to claim the **${reward}%** reward.` });
+      }
+
+      userData.valid -= requiredInvites;
+      userData.rewarded = (userData.rewarded || 0) + 1;
+      invites[targetUser.id] = userData;
+      await saveUserInvites(invites);
+
+      const rewards = await getUserRewards();
+      if (!rewards[targetUser.id]) rewards[targetUser.id] = [];
+      rewards[targetUser.id].push({ percent: parseInt(reward), claimedAt: Date.now() });
+      await saveUserRewards(rewards);
+
+      await updateInviteOverview();
+      await sendLog('🎁 Reward Claimed', `<@${targetUser.id}> claimed a **${reward}%** discount reward.`, 0x00ff88);
+
+      return i.editReply({ content: `✅ Reward of **${reward}%** claimed for ${targetUser.username}!` });
+    }
+
+    if (name === 'clear') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      const amount = i.options.getInteger('amount');
+      try {
+        await i.channel.bulkDelete(amount, true);
+        return i.reply({ content: `✅ Cleared **${amount}** messages.`, flags: MessageFlags.Ephemeral });
+      } catch (e) {
+        return i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral });
+      }
     }
 
     if (name === 'clearallproducts') {
@@ -1096,10 +1307,22 @@ client.on('interactionCreate', async (i) => {
 
     if (name === 'resetearned') {
       await i.deferReply({ flags: MessageFlags.Ephemeral });
+      
+      const oldEarnings = await getEarnings();
       const earnings = { [EARNER_1_ID]: 0, [EARNER_2_ID]: 0, [EARNER_3_ID]: 0, [EARNER_4_ID]: 0 };
+      
+      const fields = [
+        { name: 'Old Earnings', value:
+          `<@${EARNER_1_ID}>: €${(oldEarnings[EARNER_1_ID] || 0).toFixed(2)}\n` +
+          `<@${EARNER_2_ID}>: €${(oldEarnings[EARNER_2_ID] || 0).toFixed(2)}\n` +
+          `<@${EARNER_3_ID}>: €${(oldEarnings[EARNER_3_ID] || 0).toFixed(2)}\n` +
+          `<@${EARNER_4_ID}>: €${(oldEarnings[EARNER_4_ID] || 0).toFixed(2)}`
+        }
+      ];
+
       await saveEarnings(earnings);
       await updateEarningsPanel();
-      await sendLog('🔄 Earnings Reset', `All earnings have been reset to **€0.00** by <@${i.user.id}>.`, 0xffaa00);
+      await sendLog('🔄 Earnings Reset', `All earnings have been reset to **€0.00** by <@${i.user.id}>.`, 0xffaa00, fields);
       return i.editReply({ content: '✅ Earnings reset to 0 for all users.' });
     }
 
@@ -2458,6 +2681,49 @@ client.on('interactionCreate', async (i) => {
       modal.addComponents(new ActionRowBuilder().addComponents(input));
       return i.showModal(modal);
     }
+
+    if (i.customId === 'invite_get_link') {
+      try {
+        const guild = i.guild;
+        const invites = await guild.invites.fetch();
+        let userInvite = invites.find(inv => inv.inviter?.id === i.user.id);
+        
+        if (!userInvite) {
+          const channel = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.permissionsFor(guild.members.me).has(PermissionFlagsBits.CreateInstantInvite));
+          if (channel) {
+            userInvite = await channel.createInvite({ maxAge: 0, maxUses: 0, unique: true, reason: 'Personal invite link' });
+          }
+        }
+
+        if (userInvite) {
+          await i.user.send({ content: `Here is your personal invite link: https://discord.gg/${userInvite.code}` }).catch(() => console.log('Could not DM user'));
+          return i.reply({ content: '✅ I have sent your personal invite link in DM!', flags: MessageFlags.Ephemeral });
+        } else {
+          return i.reply({ content: '❌ Could not create an invite. Please contact staff.', flags: MessageFlags.Ephemeral });
+        }
+      } catch (e) {
+        return i.reply({ content: `❌ Error: ${e.message}`, flags: MessageFlags.Ephemeral });
+      }
+    }
+
+    if (i.customId === 'invite_check') {
+      const invites = await getUserInvites();
+      const userData = invites[i.user.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
+      
+      const embed = new EmbedBuilder()
+        .setTitle('📊 Your Invites')
+        .setColor(0xffaa00)
+        .setThumbnail(i.user.displayAvatarURL())
+        .addFields(
+          { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
+          { name: 'Fake Invites', value: `${userData.fake || 0}`, inline: true },
+          { name: 'Rewarded (used)', value: `${userData.rewarded || 0}`, inline: true }
+        )
+        .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+        .setTimestamp();
+
+      return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    }
   }
 });
 
@@ -2471,6 +2737,44 @@ client.on('guildMemberAdd', async (member) => {
     await member.send({ embeds: [embed] });
   } catch (e) {}
   await updateVerifyMessage();
+
+  // Invite tracking
+  try {
+    const guild = member.guild;
+    const cachedInvites = client.invitesCache?.get(guild.id) || new Map();
+    const newInvites = await guild.invites.fetch();
+    
+    for (const [code, invite] of newInvites) {
+      const cached = cachedInvites.get(code);
+      if (cached && cached.uses < invite.uses) {
+        const inviter = invite.inviter;
+        if (inviter) {
+          const invites = await getUserInvites();
+          const userData = invites[inviter.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
+          
+          // Check if the new member was previously in the server
+          const wasMember = await guild.members.fetch(member.id).catch(() => null);
+          const isNew = !wasMember || !wasMember.joinedTimestamp || Date.now() - wasMember.joinedTimestamp < 10000;
+          
+          if (isNew) {
+            userData.valid += 1;
+          } else {
+            userData.fake += 1;
+          }
+          
+          if (!userData.invitedUsers) userData.invitedUsers = [];
+          userData.invitedUsers.push(member.id);
+          invites[inviter.id] = userData;
+          await saveUserInvites(invites);
+          await updateInviteOverview();
+        }
+        break;
+      }
+    }
+    
+    // Refresh cache
+    client.invitesCache.set(guild.id, new Map(newInvites.map(inv => [inv.code, inv])));
+  } catch (e) { console.error('Invite tracking error:', e.message); }
 });
 
 client.on('guildMemberRemove', async (member) => {
@@ -2502,6 +2806,15 @@ client.once('ready', async () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
   startStatusInterval();
 
+  // Load invites cache
+  client.invitesCache = new Map();
+  for (const guild of client.guilds.cache.values()) {
+    const invites = await guild.invites.fetch().catch(() => null);
+    if (invites) {
+      client.invitesCache.set(guild.id, new Map(invites.map(inv => [inv.code, inv])));
+    }
+  }
+
   await new Promise(resolve => setTimeout(resolve, 3000));
   await setupVerify();
 
@@ -2522,6 +2835,12 @@ client.once('ready', async () => {
 
   await new Promise(resolve => setTimeout(resolve, 3000));
   await updateCustomerOverview();
+
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  await setupInviteRewards();
+
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  await updateInviteOverview();
 
   // Zorg dat het kanaal voor Streaming gekoppeld is en de embed plaatst
   const store = await getStoreData();
