@@ -678,6 +678,37 @@ async function closeTicket(channel, closerId) {
   setTimeout(async () => { try { await channel.delete('Ticket closed'); } catch (e) {} }, 5000);
 }
 
+// ===== Refresh Function =====
+async function refreshChannel(channel) {
+  const id = channel.id;
+  const store = await getStoreData();
+
+  // Delete recent bot messages in this channel
+  const fetched = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+  if (fetched) for (const m of fetched.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
+
+  if (id === VERIFY_CHANNEL_ID) { await setupVerify(); return 'Verify message'; }
+  if (id === LEGIT_CHANNEL_ID) { await setupLegit(); return 'Legit poll'; }
+  if (id === TICKET_PANEL_CHANNEL_ID) { await setupTicketPanel(); return 'Ticket panel'; }
+  if (id === STORE_PANEL_CHANNEL_ID) { await setupStorePanel(); return 'Store panel'; }
+  if (id === PAYMENT_METHODS_CHANNEL_ID) { await setupPaymentMethods(); return 'Payment methods'; }
+  if (id === EARNINGS_PANEL_CHANNEL_ID) { await updateEarningsPanel(); return 'Earnings panel'; }
+  if (id === CUSTOMER_OVERVIEW_CHANNEL_ID) { await updateCustomerOverview(); return 'Customer overview'; }
+  if (id === INVITE_REWARDS_CHANNEL_ID) { await setupInviteRewards(); return 'Invite rewards'; }
+  if (id === INVITE_OVERVIEW_CHANNEL_ID) { await updateInviteOverview(); return 'Invite overview'; }
+  if (id === TICKET_STATS_CHANNEL_ID) { await updateTicketStats(); return 'Ticket stats'; }
+
+  // Service shop channel?
+  for (const serviceName of Object.keys(store.serviceChannels || {})) {
+    if (store.serviceChannels[serviceName] === id) {
+      await updateServiceShop(serviceName);
+      return `Service shop (${serviceName})`;
+    }
+  }
+
+  return null;
+}
+
 // ===== Commands =====
 const commands = [
   { name: 'vouch', description: 'Leave a vouch', options: [
@@ -720,6 +751,7 @@ const commands = [
       { name: 'product', description: 'Product name', type: 3, required: false },
       { name: 'service', description: 'Service name', type: 3, required: false },
       { name: 'extra', description: 'Extra information', type: 3, required: false } ] },
+  { name: 'refresh', description: 'Re-send the panel/embed for this channel' },
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -741,6 +773,13 @@ client.on('interactionCreate', async (i) => {
 
     if (['changepaymentmethod', 'resetearned', 'userewards'].includes(name) && !isStaff(i.member))
       return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
+
+    if (name === 'refresh') {
+      if (!isStaff(i.member)) return i.reply({ content: '❌ No permission.', flags: MessageFlags.Ephemeral });
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      const result = await refreshChannel(i.channel);
+      return i.editReply({ content: result ? `✅ Refreshed: **${result}**` : '❌ No panel/embed is configured for this channel.' });
+    }
 
     if (name === 'search') {
       if (!isStaff(i.member)) return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
