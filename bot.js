@@ -45,6 +45,7 @@ const GIVEAWAY_CHANNEL_ID = '1564415334658744443';
 const CUSTOMER_OVERVIEW_CHANNEL_ID = '1565133390431395840';
 const INVITE_REWARDS_CHANNEL_ID = '1564551605095768064';
 const INVITE_OVERVIEW_CHANNEL_ID = '1565359774982348890';
+const BOOST_CHANNEL_ID = '1564415311401320518';
 
 // Earnings Users
 const EARNER_1_ID = '710623438657683486';
@@ -64,7 +65,7 @@ const STAFF_ROLE_IDS = [
   MAIN_TAG_ROLE_ID
 ];
 const CLEAR_PRODUCTS_ROLE_ID = '1564415129955729418';
-const EDIT_CUSTOMER_ROLE_ID = '1565359774982348890'; // Alleen deze rol mag /editcustomer
+const EDIT_CUSTOMER_ROLE_ID = '1564415129955729418'; // Alleen deze rol mag /editcustomer
 
 // Spent Roles
 const SPENT_ROLES = [
@@ -104,6 +105,15 @@ const PAYMENT_METHODS = {
   paypal: 'PayPal',
   crypto: 'Crypto (LTC)',
   bank: 'Bank Transfer'
+};
+
+// Payment method emojis (zelfde als payment methods kanaal)
+const PAYMENT_EMOJIS = {
+  ideal: '<:ideal:1564724669129560174>',
+  tikkie: '💸',
+  paypal: '<:paypal:1564726369219510354>',
+  crypto: '<:ltc:1564724536979759124>',
+  bank: '<:bank:1564724257164886078>',
 };
 
 const pendingPurchases = new Map();
@@ -417,8 +427,9 @@ function buildInviteRewardsEmbed() {
       `> Share it with your friends.\n` +
       `> Check your invites via **Check My Invites**.\n\n` +
       `**Rewards:**\n` +
-      `> 🔥 **5 Invites** → 5% Discount\n` +
-      `> 🔥 **10 Invites** → 10% Discount\n\n` +
+      `> 🔥 **10 Valid Invites** → **1x 10% Discount**\n` +
+      `> 🔥 **20 Valid Invites** → **2x 10% Discount**\n` +
+      `> *(elke 10 geldige invites = 1x 10% discount)*\n\n` +
       `**How to claim:**\n` +
       `> Open a ticket with a staff member and mention your reward.\n\n` +
       `-# We do not accept fake invites or bots. Invites from users who were previously in the server do not count.`
@@ -468,7 +479,8 @@ function buildInviteOverviewEmbed(invites) {
 
   let desc = '';
   for (const [userId, data] of entries) {
-    desc += `<@${userId}>: **${data.valid}** valid invites (${data.rewarded || 0} rewarded)\n`;
+    const availableRewards = Math.floor(data.valid / 10);
+    desc += `<@${userId}>: **${data.valid}** valid invites — **${availableRewards}x 10%** available\n`;
   }
 
   embed.setDescription(desc);
@@ -1105,7 +1117,7 @@ const commands = [
   ] },
   { name: 'editcustomer', description: 'Edit the amount a customer spent', options: [
       { name: 'user', description: 'User', type: 6, required: true },
-      { name: 'amount', description: 'New spent amount', type: 10, required: true, min_value: 0 }
+      { name: 'earned', description: 'New earned amount (e.g. 0,75)', type: 3, required: true }
   ] },
   { name: 'resetearned', description: 'Reset all earnings to 0' },
   { name: 'clearallproducts', description: 'Clear all products and store data' },
@@ -1192,7 +1204,7 @@ client.on('interactionCreate', async (i) => {
       const targetUser = i.options.getUser('user');
       const invites = await getUserInvites();
       const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
-      const invitedList = (userData.invitedUsers || []).map(id => `<@${id}>`).join(', ') || '*Nobody*';
+      const invitedList = (userData.invitedUsers || []).map(id => `<@${id}>`).join('\n') || '*Nobody*';
 
       const embed = new EmbedBuilder()
         .setTitle(`📊 Invites for ${targetUser.tag}`)
@@ -1217,14 +1229,20 @@ client.on('interactionCreate', async (i) => {
 
       await i.deferReply({ flags: MessageFlags.Ephemeral });
       const targetUser = i.options.getUser('user');
-      const amount = i.options.getNumber('amount');
+      const earnedRaw = i.options.getString('earned');
+      
+      const earned = parseFloat(earnedRaw.replace(',', '.').replace('€', '').trim());
+      if (isNaN(earned) || earned < 0) {
+        return i.editReply({ content: '❌ Invalid amount. Use a number like `0,75` or `5.50`.' });
+      }
+
       const spent = await getCustomerSpent();
       const oldAmount = spent[targetUser.id] || 0;
-      spent[targetUser.id] = amount;
+      spent[targetUser.id] = earned;
       await saveCustomerSpent(spent);
       await updateCustomerOverview();
-      await sendLog('✏️ Customer Edited', `<@${i.user.id}> changed <@${targetUser.id}>'s spent from **€${oldAmount.toFixed(2)}** to **€${amount.toFixed(2)}**.`, 0xffaa00);
-      return i.editReply({ content: `✅ Updated <@${targetUser.id}> spent from **€${oldAmount.toFixed(2)}** to **€${amount.toFixed(2)}**.` });
+      await sendLog('✏️ Customer Edited', `<@${i.user.id}> changed <@${targetUser.id}>'s earned from **€${oldAmount.toFixed(2)}** to **€${earned.toFixed(2)}**.`, 0xffaa00);
+      return i.editReply({ content: `✅ Updated <@${targetUser.id}> earned from **€${oldAmount.toFixed(2)}** to **€${earned.toFixed(2)}**.` });
     }
 
     if (name === 'userewards') {
@@ -1234,7 +1252,7 @@ client.on('interactionCreate', async (i) => {
       const invites = await getUserInvites();
       const userData = invites[targetUser.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
 
-      const requiredInvites = reward === '5' ? 5 : 10;
+      const requiredInvites = 10;
       if (userData.valid < requiredInvites) {
         return i.editReply({ content: `❌ ${targetUser.username} has only **${userData.valid}** valid invites, but needs **${requiredInvites}** to claim the **${reward}%** reward.` });
       }
@@ -1495,7 +1513,7 @@ client.on('interactionCreate', async (i) => {
       const menu = new StringSelectMenuBuilder()
         .setCustomId('change_payment_method')
         .setPlaceholder('Select a new payment method')
-        .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key })));
+        .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key, emoji: PAYMENT_EMOJIS[key] })));
 
       return i.reply({ content: 'Select the new payment method for this ticket:', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
     }
@@ -1774,7 +1792,7 @@ client.on('interactionCreate', async (i) => {
       const menu = new StringSelectMenuBuilder()
         .setCustomId('purchase_payment')
         .setPlaceholder('Select payment method')
-        .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key })));
+        .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key, emoji: PAYMENT_EMOJIS[key] })));
 
       return i.update({ content: `You want **${quantity}** of **${product}**. Total: **${formattedTotal}**.\n\nSelect your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
     }
@@ -2752,7 +2770,6 @@ client.on('guildMemberAdd', async (member) => {
           const invites = await getUserInvites();
           const userData = invites[inviter.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
           
-          // Check if the new member was previously in the server
           const wasMember = await guild.members.fetch(member.id).catch(() => null);
           const isNew = !wasMember || !wasMember.joinedTimestamp || Date.now() - wasMember.joinedTimestamp < 10000;
           
@@ -2772,7 +2789,6 @@ client.on('guildMemberAdd', async (member) => {
       }
     }
     
-    // Refresh cache
     client.invitesCache.set(guild.id, new Map(newInvites.map(inv => [inv.code, inv])));
   } catch (e) { console.error('Invite tracking error:', e.message); }
 });
@@ -2781,7 +2797,6 @@ client.on('guildMemberRemove', async (member) => {
   if (member.guild.id !== GUILD_ID) return;
   await updateVerifyMessage();
 
-  // Auto-close tickets for leaving member
   try {
     const tickets = await getTickets();
     const userTickets = Object.entries(tickets).filter(([_, t]) => t.userId === member.id);
@@ -2800,13 +2815,27 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
   const hadRole = oldMember.roles.cache.has(VERIFIED_ROLE_ID);
   const hasRole = newMember.roles.cache.has(VERIFIED_ROLE_ID);
   if (hadRole !== hasRole) await updateVerifyMessage();
+
+  if (!oldMember.premiumSince && newMember.premiumSince) {
+    try {
+      const boostChannel = await client.channels.fetch(BOOST_CHANNEL_ID).catch(() => null);
+      if (boostChannel) {
+        const boostEmbed = new EmbedBuilder()
+          .setTitle('🚀 New Server Boost!')
+          .setColor(0xff73fa)
+          .setDescription(`<@${newMember.id}> just boosted the server! Thank you so much for your support! 💖\n\nWe now have **${newMember.guild.premiumSubscriptionCount}** boosts!`)
+          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
+          .setTimestamp();
+        await boostChannel.send({ content: `<@${newMember.id}>`, embeds: [boostEmbed] });
+      }
+    } catch (e) { console.error('Boost notification error:', e.message); }
+  }
 });
 
 client.once('ready', async () => {
   console.log(`✅ Bot online as ${client.user.tag}`);
   startStatusInterval();
 
-  // Load invites cache
   client.invitesCache = new Map();
   for (const guild of client.guilds.cache.values()) {
     const invites = await guild.invites.fetch().catch(() => null);
@@ -2842,7 +2871,6 @@ client.once('ready', async () => {
   await new Promise(resolve => setTimeout(resolve, 3000));
   await updateInviteOverview();
 
-  // Zorg dat het kanaal voor Streaming gekoppeld is en de embed plaatst
   const store = await getStoreData();
   if (store.services['Streaming'] && !store.serviceChannels?.['Streaming']) {
     if (!store.serviceChannels) store.serviceChannels = {};
@@ -2850,7 +2878,6 @@ client.once('ready', async () => {
     await saveStoreData(store);
   }
   
-  // Update alle gekoppelde services
   if (store.serviceChannels) {
     for (const serviceName of Object.keys(store.serviceChannels)) {
       await updateServiceShop(serviceName);
