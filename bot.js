@@ -1166,7 +1166,7 @@ client.on('interactionCreate', async (i) => {
       }
     }
 
-    if (name === 'search' || name === 'checkinvites') {
+    if (name === 'search') {
       if (!isStaff(i.member)) {
         return i.reply({ content: '❌ You do not have permission to use this command.', flags: MessageFlags.Ephemeral });
       }
@@ -1212,7 +1212,7 @@ client.on('interactionCreate', async (i) => {
         .setThumbnail(targetUser.displayAvatarURL())
         .addFields(
           { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
-          { name: 'Available Rewards', value: `${availableRewards}x 10%`, inline: true },
+          { name: 'Available Rewards', value: `${availableRewards} rewards`, inline: true },
           { name: 'Invited Users', value: invitedList, inline: false }
         )
         .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
@@ -2722,15 +2722,29 @@ client.on('interactionCreate', async (i) => {
     if (i.customId === 'invite_check') {
       const invites = await getUserInvites();
       const userData = invites[i.user.id] || { valid: 0, fake: 0, rewarded: 0, invitedUsers: [] };
-      const availableRewards = Math.floor(userData.valid / 10);
       
+      // Bepaal de rewards tekst
+      let rewardsText = '0 rewards';
+      if (userData.valid >= 10) {
+        const tens = Math.floor(userData.valid / 10);
+        const fives = Math.floor(userData.valid / 5); // Alleen als je ook 5% wilt tonen
+
+        if (tens >= 2) {
+          rewardsText = `${tens} x 10%`;
+        } else if (tens === 1) {
+          rewardsText = `1 x 10%`;
+        } else if (fives >= 2) {
+          rewardsText = `${fives} x 5%`;
+        }
+      }
+
       const embed = new EmbedBuilder()
         .setTitle('📊 Your Invites')
         .setColor(0xffaa00)
         .setThumbnail(i.user.displayAvatarURL())
         .addFields(
           { name: 'Valid Invites', value: `${userData.valid || 0}`, inline: true },
-          { name: 'Available Rewards', value: `${availableRewards}x 10%`, inline: true }
+          { name: 'Available Rewards', value: `${rewardsText}`, inline: true }
         )
         .setFooter({ text: FOOTER_TEXT, iconURL: LOGO })
         .setTimestamp();
