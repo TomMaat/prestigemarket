@@ -1,5 +1,9 @@
 require('dotenv').config();
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites, GatewayIntentBits.GuildPresences] });
+const {
+  Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
+  ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder,
+  TextInputStyle, ChannelType, PermissionFlagsBits, AttachmentBuilder,
+  REST, Routes, MessageFlags,
 } = require('discord.js');
 const http = require('http');
 
@@ -32,16 +36,6 @@ const BOOST_CHANNEL_ID = '1564415311401320518';
 const WELCOME_CHANNEL_ID = '1565405396527489134';
 const TICKET_STATS_CHANNEL_ID = '1565405683678191686';
 const RESTOCK_CHANNEL_ID = '1564551527027187773';
-
-// ===== Wallet / Ads System =====
-const WALLET_OVERVIEW_CHANNEL_ID = '1565812422286115007';
-const STAFF_DASHBOARD_CHANNEL_ID = '1565814465503695009';
-const ADS_OVERVIEW_CHANNEL_ID = '1565819783289770116';
-const PRESTIGE_STATUS_TEXT = '.gg/prestigemarket';
-const DAILY_AD_REWARD_CENTS = 10;
-const WALLET_PAYMENT_KEY = 'wallet';
-const WALLET_PAYMENT_LABEL = 'Wallet';
-const WALLET_PAYMENT_EMOJI = '💰';
 
 const EARNER_1_ID = '710623438657683486';
 const EARNER_2_ID = '755111368839135367';
@@ -123,8 +117,6 @@ async function readGist() {
     customerSpent: {}, customerTickets: {}, customerHistory: {}, customerOverviewMessageId: null,
     userInvites: {}, userRewards: {}, inviteRewardsMessageId: null, inviteOverviewMessageId: null,
     ticketStats: { total: 0, closed: 0 }, ticketStatsMessageId: null,
-    wallets: {}, walletClaims: {}, ads: {},
-    walletOverviewMessageId: null, staffDashboardMessageId: null, adsOverviewMessageId: null,
   };
   if (!data.files || !data.files['data.json']) return defaults;
   return { ...defaults, ...JSON.parse(data.files['data.json'].content) };
@@ -201,42 +193,8 @@ const saveTicketStats = async (s) => { const d = await readGist(); d.ticketStats
 const getTicketStatsMessageId = async () => (await readGist()).ticketStatsMessageId;
 const setTicketStatsMessageId = async (id) => { const d = await readGist(); d.ticketStatsMessageId = id; await writeGist(d); };
 
-// ===== Wallet helpers =====
-const getWallets = async () => (await readGist()).wallets || {};
-async function saveWallets(w) { const d = await readGist(); d.wallets = w; await writeGist(d); }
-async function getWallet(userId) { const w = await getWallets(); return w[userId] || 0; }
-async function addToWallet(userId, amountCents) {
-  const w = await getWallets();
-  w[userId] = (w[userId] || 0) + amountCents;
-  await saveWallets(w);
-  return w[userId];
-}
-async function removeFromWallet(userId, amountCents) {
-  const w = await getWallets();
-  w[userId] = Math.max(0, (w[userId] || 0) - amountCents);
-  await saveWallets(w);
-  return w[userId];
-}
-const getWalletClaims = async () => (await readGist()).walletClaims || {};
-async function saveWalletClaims(c) { const d = await readGist(); d.walletClaims = c; await writeGist(d); }
-const getAds = async () => (await readGist()).ads || {};
-async function saveAds(a) { const d = await readGist(); d.ads = a; await writeGist(d); }
-const getWalletOverviewMessageId = async () => (await readGist()).walletOverviewMessageId;
-async function setWalletOverviewMessageId(id) { const d = await readGist(); d.walletOverviewMessageId = id; await writeGist(d); }
-const getStaffDashboardMessageId = async () => (await readGist()).staffDashboardMessageId;
-async function setStaffDashboardMessageId(id) { const d = await readGist(); d.staffDashboardMessageId = id; await writeGist(d); }
-const getAdsOverviewMessageId = async () => (await readGist()).adsOverviewMessageId;
-async function setAdsOverviewMessageId(id) { const d = await readGist(); d.adsOverviewMessageId = id; await writeGist(d); }
-
 // ===== Helpers =====
 const isStaff = (member) => member && STAFF_ROLE_IDS.some(id => member.roles.cache.has(id));
-
-function hasPrestigeStatus(member) {
-  if (!member) return false;
-  return member.presence?.activities?.some(a =>
-    a.type === 4 && a.state && a.state.toLowerCase().includes(PRESTIGE_STATUS_TEXT)
-  ) || false;
-}
 
 function formatPrice(priceStr) {
   if (!priceStr) return 'N/A';
@@ -309,123 +267,6 @@ async function updateTicketStats() {
     const newMsg = await ch.send({ embeds: [embed] });
     await setTicketStatsMessageId(newMsg.id);
   } catch (e) { console.error('Ticket stats error:', e.message); }
-}
-
-// ===== Wallet Overview =====
-async function updateWalletOverview() {
-  try {
-    const ch = await client.channels.fetch(WALLET_OVERVIEW_CHANNEL_ID).catch(() => null);
-    if (!ch) return;
-    const wallets = await getWallets();
-    const entries = Object.entries(wallets).sort((a, b) => b[1] - a[1]).slice(0, 50);
-    const embed = new EmbedBuilder()
-      .setTitle('💰 Wallet Balances').setColor(0x00ff88).setThumbnail(LOGO)
-      .setDescription(entries.length
-        ? entries.map(([id, cents]) => `<@${id}>: **€${(cents / 100).toFixed(2)}**`).join('\n')
-        : '*Nog geen wallets.*')
-      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-    const messageId = await getWalletOverviewMessageId();
-    if (messageId) {
-      const msg = await ch.messages.fetch(messageId).catch(() => null);
-      if (msg) { await msg.edit({ embeds: [embed] }); return; }
-    }
-    const newMsg = await ch.send({ embeds: [embed] });
-    await setWalletOverviewMessageId(newMsg.id);
-  } catch (e) { console.error('Wallet overview error:', e.message); }
-}
-
-// ===== Staff Dashboard =====
-async function updateStaffDashboard() {
-  try {
-    const ch = await client.channels.fetch(STAFF_DASHBOARD_CHANNEL_ID).catch(() => null);
-    if (!ch) return;
-    const ads = await getAds();
-    const wallets = await getWallets();
-    const activeAds = Object.values(ads).filter(a => a.active).length;
-    const totalCents = Object.values(wallets).reduce((s, v) => s + v, 0);
-    const tickets = await getTickets();
-    const stats = await getTicketStats();
-    const embed = new EmbedBuilder()
-      .setTitle('📊 Staff Dashboard').setColor(0x5865f2).setThumbnail(LOGO)
-      .addFields(
-        { name: '🟢 Actieve Ads', value: `**${activeAds}**`, inline: true },
-        { name: '💰 Totaal in Wallets', value: `**€${(totalCents / 100).toFixed(2)}**`, inline: true },
-        { name: '🎫 Open Tickets', value: `**${Object.keys(tickets).length}**`, inline: true },
-        { name: '🔒 Closed Tickets', value: `**${stats.closed}**`, inline: true },
-        { name: '📁 Totaal Tickets', value: `**${Object.keys(tickets).length + stats.closed}**`, inline: true }
-      )
-      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-    const messageId = await getStaffDashboardMessageId();
-    if (messageId) {
-      const msg = await ch.messages.fetch(messageId).catch(() => null);
-      if (msg) { await msg.edit({ embeds: [embed] }); return; }
-    }
-    const newMsg = await ch.send({ embeds: [embed] });
-    await setStaffDashboardMessageId(newMsg.id);
-  } catch (e) { console.error('Staff dashboard error:', e.message); }
-}
-
-// ===== Ads Overzicht =====
-async function updateAdsOverview() {
-  try {
-    const ch = await client.channels.fetch(ADS_OVERVIEW_CHANNEL_ID).catch(() => null);
-    if (!ch) return;
-    const ads = await getAds();
-    const wallets = await getWallets();
-    const claims = await getWalletClaims();
-    const activeAds = Object.entries(ads).filter(([_, a]) => a.active);
-    const lines = activeAds.map(([userId, a]) => {
-      const days = Object.keys(claims).filter(k => k.startsWith(`${userId}_`)).length;
-      const balance = wallets[userId] || 0;
-      return `<@${userId}> — **${days}** dagen actief — saldo **€${(balance / 100).toFixed(2)}**`;
-    });
-    const embed = new EmbedBuilder()
-      .setTitle('📋 Ads Overzicht').setColor(0xffaa00).setThumbnail(LOGO)
-      .setDescription(lines.length ? lines.join('\n') : '*Geen actieve ads.*')
-      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-    const messageId = await getAdsOverviewMessageId();
-    if (messageId) {
-      const msg = await ch.messages.fetch(messageId).catch(() => null);
-      if (msg) { await msg.edit({ embeds: [embed] }); return; }
-    }
-    const newMsg = await ch.send({ embeds: [embed] });
-    await setAdsOverviewMessageId(newMsg.id);
-  } catch (e) { console.error('Ads overview error:', e.message); }
-}
-
-// ===== Daily Ad Reward =====
-async function runDailyAdRewards() {
-  try {
-    const guild = client.guilds.cache.get(GUILD_ID);
-    if (!guild) return;
-    await guild.members.fetch();
-    const today = new Date().toISOString().slice(0, 10);
-    const ads = await getAds();
-    const claims = await getWalletClaims();
-    let rewarded = 0;
-    for (const [userId, ad] of Object.entries(ads)) {
-      if (!ad.active) continue;
-      const claimKey = `${userId}_${today}`;
-      if (claims[claimKey]) continue;
-      const member = await guild.members.fetch(userId).catch(() => null);
-      if (!member) continue;
-      if (!hasPrestigeStatus(member)) continue;
-      await addToWallet(userId, DAILY_AD_REWARD_CENTS);
-      claims[claimKey] = DAILY_AD_REWARD_CENTS;
-      rewarded++;
-    }
-    if (rewarded) {
-      await saveWalletClaims(claims);
-      await sendLog('💰 Daily Ad Rewards', `**${rewarded}** ads hebben vandaag **${DAILY_AD_REWARD_CENTS} cent** ontvangen.`, 0x00ff88);
-    }
-    await updateWalletOverview();
-    await updateStaffDashboard();
-    await updateAdsOverview();
-  } catch (e) { console.error('Daily ad reward error:', e.message); }
-}
-function startDailyAdRewards() {
-  setTimeout(() => runDailyAdRewards(), 60 * 1000);
-  setInterval(runDailyAdRewards, 24 * 60 * 60 * 1000);
 }
 
 // ===== Customer Overview =====
@@ -928,9 +769,6 @@ async function refreshChannel(channel) {
   if (id === INVITE_REWARDS_CHANNEL_ID) { await setupInviteRewards(); return 'Invite rewards'; }
   if (id === INVITE_OVERVIEW_CHANNEL_ID) { await updateInviteOverview(); return 'Invite overview'; }
   if (id === TICKET_STATS_CHANNEL_ID) { await updateTicketStats(); return 'Ticket stats'; }
-  if (id === WALLET_OVERVIEW_CHANNEL_ID) { await updateWalletOverview(); return 'Wallet overview'; }
-  if (id === STAFF_DASHBOARD_CHANNEL_ID) { await updateStaffDashboard(); return 'Staff dashboard'; }
-  if (id === ADS_OVERVIEW_CHANNEL_ID) { await updateAdsOverview(); return 'Ads overview'; }
 
   for (const serviceName of Object.keys(store.serviceChannels || {})) {
     if (store.serviceChannels[serviceName] === id) {
@@ -982,91 +820,7 @@ const commands = [
       { name: 'service', description: 'Service name', type: 3, required: false },
       { name: 'extra', description: 'Extra information', type: 3, required: false } ] },
   { name: 'refresh', description: 'Re-send the panel/embed for this channel' },
-  { name: 'addwallet', description: 'Voeg geld toe aan een wallet', options: [
-      { name: 'user', description: 'Gebruiker', type: 6, required: true },
-      { name: 'amount', description: 'Bedrag in centen (10 = €0,10)', type: 4, required: true, min_value: 1 } ] },
-  { name: 'removewallet', description: 'Haal geld uit een wallet', options: [
-      { name: 'user', description: 'Gebruiker', type: 6, required: true },
-      { name: 'amount', description: 'Bedrag in centen', type: 4, required: true, min_value: 1 } ] },
-  { name: 'make-ad', description: 'Maak iemand adverteerder (10 cent per dag bij status)', options: [
-      { name: 'user', description: 'Gebruiker', type: 6, required: true } ] },
-  { name: 'remove-ad', description: 'Verwijder iemand als adverteerder', options: [
-      { name: 'user', description: 'Gebruiker', type: 6, required: true } ] },
-  { name: 'wallet', description: 'Bekijk je eigen wallet saldo' },
-  { name: 'walletcheck', description: 'Bekijk iemands wallet (staff)', options: [
-      { name: 'user', description: 'Gebruiker', type: 6, required: true } ] },
 ];
-
-async function createPurchaseTicket(i, userId, data) {
-  try {
-    const guild = i.guild;
-    const tickets = await getTickets();
-    if (Object.values(tickets).find(t => t.userId === userId)) {
-      pendingPurchases.delete(userId);
-      return i.editReply({ content: '❌ You already have an open ticket.' });
-    }
-    const cat = TICKET_CATEGORIES.purchase;
-    const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
-    const overwrites = [
-      { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-      { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
-      { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
-      { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
-    ];
-    const ticketChannel = await guild.channels.create({
-      name: channelName, type: ChannelType.GuildText, parent: cat.categoryId,
-      permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}`
-    });
-    await addTicket(ticketChannel.id, userId, 'purchase', {
-      section: data.section, service: data.service, product: data.product,
-      quantity: data.quantity, total: data.total,
-      payment: data.remainingMethod || data.payment,
-      walletPaidCents: data.walletPaidCents || 0,
-      remainingCents: data.remainingCents || 0,
-      remainingMethod: data.remainingMethod || null,
-    });
-    const customerTickets = await getCustomerTickets();
-    customerTickets[userId] = (customerTickets[userId] || 0) + 1;
-    await saveCustomerTickets(customerTickets);
-    const stats = await getTicketStats();
-    stats.total += 1;
-    await saveTicketStats(stats);
-    await updateTicketStats();
-
-    const paymentLines = [];
-    if (data.walletPaidCents > 0) {
-      paymentLines.push(`💰 Wallet: **€${(data.walletPaidCents / 100).toFixed(2)}** (betaald)`);
-    }
-    if (data.remainingCents > 0 && data.remainingMethod) {
-      const restName = PAYMENT_METHODS[data.remainingMethod] || data.remainingMethod;
-      paymentLines.push(`${PAYMENT_EMOJIS[data.remainingMethod] || '💳'} ${restName}: **€${(data.remainingCents / 100).toFixed(2)}** (nog te betalen)`);
-    }
-    const embed = new EmbedBuilder()
-      .setTitle('🛒 Purchase Details').setColor(0x00ff88).setThumbnail(LOGO)
-      .setDescription(`Thank you for your order, <@${userId}>! Please wait for a staff member to assist you.`)
-      .addFields(
-        { name: 'Section', value: data.section, inline: true },
-        { name: 'Service', value: data.service, inline: true },
-        { name: 'Product', value: data.product, inline: true },
-        { name: 'Quantity', value: `${data.quantity}`, inline: true },
-        { name: 'Total Price', value: data.total, inline: true },
-        { name: 'Payment', value: paymentLines.length ? paymentLines.join('\n') : '*Onbekend*', inline: false }
-      )
-      .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-    const closeRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger)
-    );
-    await ticketChannel.send({ content: `<@${userId}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
-    await sendLog('🛒 Purchase Started',
-      `<@${userId}> startte een aankoop: **${data.quantity}x ${data.product}** (${data.total}).\n` + paymentLines.join('\n'),
-      0x00ff88);
-    pendingPurchases.delete(userId);
-    return i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
-  } catch (e) {
-    console.error('createPurchaseTicket error:', e);
-    return i.editReply({ content: `❌ Error: ${e.message}` });
-  }
-}
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 (async () => {
@@ -1120,65 +874,6 @@ client.on('interactionCreate', async (i) => {
             (purchases.length ? purchases.map(p => `> ${buildVouchProductLabel(p)} - ${p.total}${p.sellerId ? ` (seller: <@${p.sellerId}>)` : ''}`).join('\n') : '*No purchases yet.*'))
           .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
         return i.editReply({ embeds: [embed] });
-      }
-      if (name === 'wallet') {
-        const balance = await getWallet(i.user.id);
-        const embed = new EmbedBuilder()
-          .setTitle('💰 Jouw Wallet').setColor(0x00ff88)
-          .setDescription(`Je hebt **€${(balance / 100).toFixed(2)}** in je wallet.`)
-          .setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-        return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
-      }
-
-      if (name === 'walletcheck') {
-        if (!isStaff(i.member)) return i.reply({ content: '❌ Geen permissie.', flags: MessageFlags.Ephemeral });
-        const target = i.options.getUser('user');
-        const balance = await getWallet(target.id);
-        return i.reply({ content: `💰 <@${target.id}> heeft **€${(balance / 100).toFixed(2)}** in de wallet.`, flags: MessageFlags.Ephemeral });
-      }
-
-      if (name === 'addwallet') {
-        if (!isStaff(i.member)) return i.reply({ content: '❌ Geen permissie.', flags: MessageFlags.Ephemeral });
-        const target = i.options.getUser('user');
-        const amount = i.options.getInteger('amount');
-        const newBalance = await addToWallet(target.id, amount);
-        await updateWalletOverview();
-        await sendLog('💰 Wallet Added', `<@${i.user.id}> voegde **${amount} cent** toe aan <@${target.id}>. Nieuw saldo: **€${(newBalance / 100).toFixed(2)}**.`, 0x00ff88);
-        return i.reply({ content: `✅ **${amount} cent** toegevoegd aan <@${target.id}>. Nieuw saldo: **€${(newBalance / 100).toFixed(2)}**.`, flags: MessageFlags.Ephemeral });
-      }
-
-      if (name === 'removewallet') {
-        if (!isStaff(i.member)) return i.reply({ content: '❌ Geen permissie.', flags: MessageFlags.Ephemeral });
-        const target = i.options.getUser('user');
-        const amount = i.options.getInteger('amount');
-        const newBalance = await removeFromWallet(target.id, amount);
-        await updateWalletOverview();
-        await sendLog('💰 Wallet Removed', `<@${i.user.id}> haalde **${amount} cent** weg bij <@${target.id}>. Nieuw saldo: **€${(newBalance / 100).toFixed(2)}**.`, 0xffaa00);
-        return i.reply({ content: `✅ **${amount} cent** verwijderd van <@${target.id}>. Nieuw saldo: **€${(newBalance / 100).toFixed(2)}**.`, flags: MessageFlags.Ephemeral });
-      }
-
-      if (name === 'make-ad') {
-        if (!isStaff(i.member)) return i.reply({ content: '❌ Geen permissie.', flags: MessageFlags.Ephemeral });
-        const target = i.options.getUser('user');
-        const ads = await getAds();
-        ads[target.id] = { active: true, since: Date.now() };
-        await saveAds(ads);
-        await updateStaffDashboard();
-        await updateAdsOverview();
-        await sendLog('📢 Ad Created', `<@${i.user.id}> maakte <@${target.id}> adverteerder.`, 0x00ff88);
-        return i.reply({ content: `✅ <@${target.id}> is nu een actieve ad.`, flags: MessageFlags.Ephemeral });
-      }
-
-      if (name === 'remove-ad') {
-        if (!isStaff(i.member)) return i.reply({ content: '❌ Geen permissie.', flags: MessageFlags.Ephemeral });
-        const target = i.options.getUser('user');
-        const ads = await getAds();
-        if (ads[target.id]) ads[target.id].active = false;
-        await saveAds(ads);
-        await updateStaffDashboard();
-        await updateAdsOverview();
-        await sendLog('📢 Ad Removed', `<@${i.user.id}> verwijderde <@${target.id}> als adverteerder.`, 0xffaa00);
-        return i.reply({ content: `✅ <@${target.id}> is geen actieve ad meer.`, flags: MessageFlags.Ephemeral });
       }
 
       if (name === 'checkinvites') {
@@ -1630,10 +1325,8 @@ client.on('interactionCreate', async (i) => {
         if (!data) return i.reply({ content: '❌ Session expired.', flags: MessageFlags.Ephemeral });
         data.product = product; data.quantity = quantity; data.total = formattedTotal;
         const menu = new StringSelectMenuBuilder().setCustomId('purchase_payment').setPlaceholder('Select payment method')
-          .addOptions([
-            ...Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key, emoji: PAYMENT_EMOJIS[key] })),
-            { label: WALLET_PAYMENT_LABEL, value: WALLET_PAYMENT_KEY, emoji: WALLET_PAYMENT_EMOJI }
-          ]);
+          .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key, emoji: PAYMENT_EMOJIS[key] })));
+        return i.update({ content: `You want **${quantity}** of **${product}**. Total: **${formattedTotal}**.\n\nSelect your payment method:`, components: [new ActionRowBuilder().addComponents(menu)] });
       }
 
       if (cid.startsWith('modal_create_ticket_')) {
@@ -1978,62 +1671,50 @@ client.on('interactionCreate', async (i) => {
         return i.showModal(modal);
       }
 
-      if      if (cid === 'purchase_payment') {
+      if (cid === 'purchase_payment') {
         const data = pendingPurchases.get(userId);
         if (!data) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
-
-        const chosen = i.values[0];
-        const totalCents = Math.round(parseFloat(String(data.total).replace('€', '').replace(',', '.')) * 100);
-
-        if (chosen === WALLET_PAYMENT_KEY) {
-          const balance = await getWallet(userId);
-          if (balance >= totalCents) {
-            await removeFromWallet(userId, totalCents);
-            await updateWalletOverview();
-            await i.update({ content: '✅ Betaling met wallet gelukt. Ticket wordt aangemaakt...', components: [] });
-            return await createPurchaseTicket(i, userId, {
-              ...data, payment: WALLET_PAYMENT_KEY,
-              walletPaidCents: totalCents, remainingCents: 0, remainingMethod: null,
-            });
-          }
-          const shortCents = totalCents - balance;
-          const embed = new EmbedBuilder()
-            .setTitle('💰 Wallet — onvoldoende saldo').setColor(0xffaa00).setThumbnail(LOGO)
-            .setDescription(
-              `Je wallet-saldo is **€${(balance / 100).toFixed(2)}**, maar het totaal is **€${(totalCents / 100).toFixed(2)}**.\n\n` +
-              `Je komt **€${(shortCents / 100).toFixed(2)}** tekort.\n\nKies hieronder hoe je de rest wilt betalen:`
-            ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
-          const restMenu = new StringSelectMenuBuilder().setCustomId('purchase_payment_rest').setPlaceholder('Betaal de rest met...')
-            .addOptions(Object.entries(PAYMENT_METHODS).map(([key, name]) => ({ label: name, value: key, emoji: PAYMENT_EMOJIS[key] })));
-          data.walletPaidCents = balance;
-          data.remainingCents = shortCents;
-          pendingPurchases.set(userId, data);
-          return i.update({ embeds: [embed], components: [new ActionRowBuilder().addComponents(restMenu)] });
-        }
-
-        const paymentName = PAYMENT_METHODS[chosen];
+        data.payment = i.values[0];
+        const paymentName = PAYMENT_METHODS[data.payment];
         await i.update({ content: '✅ Creating your ticket...', components: [] });
-        return await createPurchaseTicket(i, userId, {
-          ...data, payment: chosen, paymentName,
-          walletPaidCents: 0, remainingCents: totalCents, remainingMethod: chosen,
-        });
-      }
-
-      if (cid === 'purchase_payment_rest') {
-        const data = pendingPurchases.get(userId);
-        if (!data || !data.remainingCents) return i.update({ content: '❌ Session expired. Please try again.', components: [] });
-        const restMethod = i.values[0];
-        const restName = PAYMENT_METHODS[restMethod];
-        await i.update({ content: `✅ Rest (€${(data.remainingCents / 100).toFixed(2)}) via **${restName}**. Ticket wordt aangemaakt...`, components: [] });
-        if (data.walletPaidCents > 0) {
-          await removeFromWallet(userId, data.walletPaidCents);
-          await updateWalletOverview();
-        }
-        return await createPurchaseTicket(i, userId, {
-          ...data, payment: 'wallet+rest', paymentName: `Wallet + ${restName}`,
-          walletPaidCents: data.walletPaidCents,
-          remainingCents: data.remainingCents, remainingMethod: restMethod,
-        });
+        try {
+          const guild = i.guild;
+          const tickets = await getTickets();
+          if (Object.values(tickets).find(t => t.userId === userId)) { pendingPurchases.delete(userId); return i.editReply({ content: '❌ You already have an open ticket.' }); }
+          const cat = TICKET_CATEGORIES.purchase;
+          const channelName = `${cat.prefix}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g, '');
+          const overwrites = [
+            { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles] },
+            { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+            { id: MAIN_TAG_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages] }
+          ];
+          const ticketChannel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText, parent: cat.categoryId, permissionOverwrites: overwrites, topic: `Ticket from ${i.user.tag}` });
+          await addTicket(ticketChannel.id, userId, 'purchase', { section: data.section, service: data.service, product: data.product, quantity: data.quantity, total: data.total, payment: data.payment });
+          const customerTickets = await getCustomerTickets();
+          customerTickets[userId] = (customerTickets[userId] || 0) + 1;
+          await saveCustomerTickets(customerTickets);
+          const stats = await getTicketStats();
+          stats.total += 1;
+          await saveTicketStats(stats);
+          await updateTicketStats();
+          const embed = new EmbedBuilder().setTitle('🛒 Purchase Details').setColor(0x00ff88).setThumbnail(LOGO)
+            .setDescription(`Thank you for your order, <@${userId}>! Please wait for a staff member to assist you.`)
+            .addFields(
+              { name: 'Section', value: data.section, inline: true },
+              { name: 'Service', value: data.service, inline: true },
+              { name: 'Product', value: data.product, inline: true },
+              { name: 'Quantity', value: `${data.quantity}`, inline: true },
+              { name: 'Total Price', value: data.total, inline: true },
+              { name: 'Payment Method', value: paymentName, inline: true }
+            ).setFooter({ text: FOOTER_TEXT, iconURL: LOGO }).setTimestamp();
+          const closeRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('Close').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+          await ticketChannel.send({ content: `<@${userId}> <@&${MAIN_TAG_ROLE_ID}>`, embeds: [embed], components: [closeRow] });
+          await sendLog('🛒 Purchase Started', `<@${userId}> started a purchase: **${data.quantity}** of **${data.product}** (${data.total}) via **${paymentName}**.`, 0x00ff88);
+          pendingPurchases.delete(userId);
+          await i.editReply({ content: `✅ Ticket created: <#${ticketChannel.id}>` });
+        } catch (e) { await i.editReply({ content: `❌ Error: ${e.message}` }); }
+        return;
       }
 
       if (cid === 'move_ticket_select') {
@@ -2569,14 +2250,6 @@ client.once('ready', async () => {
   }
   if (cleaned) await saveStoreData(store);
 
-  await new Promise(r => setTimeout(r, 3000));
-  await updateWalletOverview();
-  await new Promise(r => setTimeout(r, 3000));
-  await updateStaffDashboard();
-  await new Promise(r => setTimeout(r, 3000));
-  await updateAdsOverview();
-  startDailyAdRewards();
-  
   for (const serviceName of Object.keys(store.serviceChannels || {})) {
     if (store.services[serviceName]) await updateServiceShop(serviceName);
   }
